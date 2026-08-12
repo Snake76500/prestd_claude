@@ -1,0 +1,55 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: prest
+      POSTGRES_PASSWORD: prest
+      POSTGRES_DB: prest
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U prest -d prest"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "5432:5432"
+
+  prestd:
+    image: prest/prest:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PREST_PG_HOST: postgres
+      PREST_PG_PORT: "5432"
+      PREST_PG_USER: prest
+      PREST_PG_PASS: prest
+      PREST_PG_DATABASE: prest
+      PREST_SSL_MODE: disable
+      PREST_HTTP_PORT: "3000"
+      PREST_AUTH_ENABLED: "true"
+      PREST_JWT_KEY: ${PREST_JWT_KEY:-change-me-in-prod}
+      PREST_JWT_ALGO: HS256
+      PREST_DEBUG: "false"
+    ports:
+      - "3000:3000"
+
+  microservice:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    depends_on:
+      - prestd
+    environment:
+      PRESTD_BASE_URL: http://prestd:3000
+      PRESTD_DATABASE: prest
+      PRESTD_SCHEMA: public
+      PRESTD_USERNAME: ${PRESTD_USERNAME:-prest}
+      PRESTD_PASSWORD: ${PRESTD_PASSWORD:-prest}
+      SERVICE_API_KEY: ${SERVICE_API_KEY:-}
+    ports:
+      - "8000:8000"
+
+volumes:
+  pgdata:

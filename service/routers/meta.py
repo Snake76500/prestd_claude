@@ -1,0 +1,31 @@
+"""Endpoints de découverte de schéma en lecture seule (miroir des routes meta de prestd)."""
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends
+
+from prestd_client import PrestdClient
+
+from ..dependencies import get_client, require_api_key
+
+router = APIRouter(prefix="/meta", tags=["metadata"], dependencies=[Depends(require_api_key)])
+
+
+@router.get("/databases")
+async def list_databases(client: PrestdClient = Depends(get_client)):
+    return await client.databases()
+
+
+@router.get("/schemas")
+async def list_schemas(client: PrestdClient = Depends(get_client)):
+    return await client.schemas()
+
+
+@router.get("/tables")
+async def list_tables(client: PrestdClient = Depends(get_client)):
+    return await client.tables()
+
+
+@router.get("/tables/{table}")
+async def describe_table(table: str, client: PrestdClient = Depends(get_client)):
+    """Structure de la table (colonnes, types...) via GET /show/{db}/{schema}/{table}."""
+    return await client.describe_table(table)
