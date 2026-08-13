@@ -118,6 +118,53 @@ Et côté forme du résultat : `.select(*fields)`, `.order(*fields)` (préfixe
 
 Référence complète des paramètres : https://docs.prestd.com/api-reference/parameters
 
+### Authentification (middleware pluggable)
+
+L'authentification vers prestd se configure via un objet `auth=` passé au
+constructeur — c'est un middleware appliqué à chaque requête, avec un hook
+de rafraîchissement automatique en cas de 401 :
+
+```python
+from prestd_client import PrestdClient, JWTAuth, StaticTokenAuth, BasicAuth, CallableAuth
+
+# JWT prestd : login paresseux au premier appel, re-login automatique si le
+# token expire (401) — sans redémarrer le client ni relancer login() à la main
+client = PrestdClient(url, default_database="mydb", auth=JWTAuth("prest", "prest"))
+
+# Token déjà généré ailleurs
+client = PrestdClient(url, default_database="mydb", auth=StaticTokenAuth("eyJhbGciOi..."))
+
+# HTTP Basic
+client = PrestdClient(url, default_database="mydb", auth=BasicAuth("prest", "prest"))
+
+# Stratégie sur mesure : API key tournante, secret HashiCorp Vault, HMAC...
+client = PrestdClient(url, default_database="mydb",
+                       auth=CallableAuth(lambda: {"X-Api-Key": vault_client.get("prest-key")}))
+```
+
+Écrire sa propre stratégie revient à sous-classer `BaseAuth` :
+
+```python
+from prestd_client.auth import BaseAuth
+
+class MyAuth(BaseAuth):
+    async def get_headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {await get_token_from_somewhere()}"}
+
+    async def on_unauthorized(self) -> bool:
+        await refresh_token_somehow()
+        return True  # retente la requête une fois avec le nouveau token
+```
+
+`client.login(username, password)` et `client.set_token(token)` restent
+disponibles pour un login/override ponctuel — un token posé via `set_token`
+prend toujours le pas sur le middleware `auth=...`.
+
+> `SyncPrestdClient` + `JWTAuth` : chaque appel synchrone ouvre sa propre
+> boucle asyncio (`asyncio.run`). Le cache de token fonctionne normalement,
+> mais pour un usage soutenu avec re-login fréquent sur 401, préférez
+> `PrestdClient` async directement (FastAPI, Airflow, etc.).
+
 ### Façade synchrone (scripts, notebooks)
 
 ```python
@@ -154,6 +201,12 @@ Endpoints exposés :
 
 Si `SERVICE_API_KEY` est définie dans l'environnement, toutes les routes
 `/meta/*` et `/tables/*` exigent l'en-tête `X-API-Key`.
+
+Côté connexion à prestd, le microservice choisit automatiquement une
+stratégie du middleware d'auth (`service/main.py::_build_auth`) :
+`PRESTD_STATIC_TOKEN` si fourni, sinon `JWTAuth` à partir de
+`PRESTD_USERNAME`/`PRESTD_PASSWORD` (login paresseux + re-login automatique
+sur 401), sinon aucune auth.
 
 ## Lancer la stack complète en local (Postgres + prestd + microservice)
 

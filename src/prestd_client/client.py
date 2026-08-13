@@ -16,6 +16,7 @@ from typing import Any, Mapping, Sequence
 
 import httpx
 
+from .auth import BaseAuth
 from .exceptions import PrestdAuthError, PrestdConnectionError, raise_for_status
 from .query import QueryBuilder
 
@@ -27,12 +28,23 @@ DEFAULT_TIMEOUT = 30.0
 class PrestdClient:
     """Wrapper asynchrone léger autour d'un serveur prestd.
 
-    Exemple
-    -------
+    Exemple — authentification via middleware (recommandé, re-login auto sur 401)
+    --------------------------------------------------------------------------
+    ```python
+    from prestd_client import PrestdClient, JWTAuth
+
+    async with PrestdClient(
+        "http://localhost:3000", default_database="mydb", auth=JWTAuth("prest", "prest")
+    ) as client:
+        rows = await client.table("users").eq("active", True).order("-created_at").execute()
+    ```
+
+    Exemple — authentification manuelle (toujours supportée)
+    ----------------------------------------------------------
     ```python
     async with PrestdClient("http://localhost:3000", default_database="mydb") as client:
         await client.login("prest", "prest")  # si PREST_AUTH_ENABLED=true
-        rows = await client.table("users").eq("active", True).order("-created_at").execute()
+        rows = await client.table("users").execute()
     ```
     """
 
@@ -45,11 +57,15 @@ class PrestdClient:
         timeout: float = DEFAULT_TIMEOUT,
         verify: bool = True,
         transport: httpx.AsyncBaseTransport | None = None,
+        auth: BaseAuth | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.default_database = default_database
         self.default_schema = default_schema
         self._token: str | None = None
+        self._auth = auth
+        if self._auth is not None:
+            self._auth.bind(self)
         self._http = httpx.AsyncClient(
             base_url=self.base_url,
             timeout=timeout,
@@ -68,13 +84,22 @@ class PrestdClient:
         await self._http.aclose()
 
     def set_token(self, token: str) -> None:
-        """Attache manuellement un JWT déjà généré (évite un aller-retour /auth)."""
+        """Attache manuellement un JWT déjà généré (évite un aller-retour /auth).
+
+        Un token posé ici a priorité sur le middleware `auth=...` éventuellement
+        configuré — utile pour un override ponctuel.
+        """
         self._token = token
 
     # -- authentification --------------------------------------------------
     async def login(self, username: str, password: str) -> str:
-        """POST /auth — fonctionne uniquement si prestd tourne avec PREST_AUTH_ENABLED=true."""
-        resp = await self._request(
+        """POST /auth — fonctionne uniquement si prestd tourne avec PREST_AUTH_ENABLED=true.
+
+        Toujours disponible pour un login explicite ponctuel. Pour un
+        renouvellement automatique du token en cas d'expiration (401), passez
+        plutôt `auth=JWTAuth(username, password)` au constructeur.
+        """
+        resp = await self._raw_request(
             "POST", "/auth", json={"username": username, "password": password}
         )
         token = None
@@ -196,11 +221,40 @@ class PrestdClient:
         return db, sch
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
-        headers = kwargs.pop("headers", {}) or {}
+        """Requête authentifiée : injecte les en-têtes du middleware `auth=...`
+        (ou le token explicite posé via `set_token`/`login`), et retente une
+        fois via `auth.on_unauthorized()` si prestd répond 401."""
+        headers = dict(kwargs.pop("headers", {}) or {})
         if self._token:
             headers.setdefault("Authorization", f"Bearer {self._token}")
+        elif self._auth is not None:
+            headers.update(await self._auth.get_headers())
+
+        resp = await self._send(method, path, headers=headers, **kwargs)
+
+        if (
+            resp.status_code == 401
+            and not self._token
+            and self._auth is not None
+            and await self._auth.on_unauthorized()
+        ):
+            headers.update(await self._auth.get_headers())
+            resp = await self._send(method, path, headers=headers, **kwargs)
+
+        return self._parse_response(resp)
+
+    async def _raw_request(self, method: str, path: str, **kwargs: Any) -> Any:
+        """Requête sans injection d'auth ni retry sur 401.
+
+        Utilisée par les stratégies d'auth elles-mêmes (ex: `JWTAuth`) et par
+        `login()`, pour éviter toute récursion ou double authentification.
+        """
+        resp = await self._send(method, path, **kwargs)
+        return self._parse_response(resp)
+
+    async def _send(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         try:
-            resp = await self._http.request(method, path, headers=headers, **kwargs)
+            return await self._http.request(method, path, **kwargs)
         except httpx.TimeoutException as exc:
             raise PrestdConnectionError(f"Timeout en appelant prestd {method} {path}") from exc
         except httpx.TransportError as exc:
@@ -208,6 +262,7 @@ class PrestdClient:
                 f"Impossible de joindre prestd à {self.base_url}{path}: {exc}"
             ) from exc
 
+    def _parse_response(self, resp: httpx.Response) -> Any:
         if resp.status_code >= 400:
             try:
                 payload = resp.json()

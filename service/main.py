@@ -2,6 +2,8 @@
 
 Apporte par rapport à prestd brut :
 - sa propre auth par API key (indépendante du JWT de prestd)
+- authentification vers prestd via middleware (JWTAuth) : login paresseux et
+  re-login automatique sur 401, sans dépendre d'un login manuel au démarrage
 - une gestion d'erreurs structurée (PrestdError / ValueError -> HTTP propre)
 - des endpoints /healthz, /readyz, /meta/*
 - un point d'extension unique pour ajouter rate limiting, cache, logique
@@ -16,13 +18,28 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from prestd_client import PrestdClient, PrestdError
+from prestd_client import BaseAuth, JWTAuth, PrestdClient, PrestdError, StaticTokenAuth
 
 from .config import settings
 from .routers import health, meta, records
 
 logging.basicConfig(level=settings.log_level)
 logger = logging.getLogger("prestd_service")
+
+
+def _build_auth() -> BaseAuth | None:
+    """Choisit la stratégie d'authentification vers prestd à partir de la config.
+
+    - PRESTD_STATIC_TOKEN si fourni : token déjà généré, pas de rafraîchissement.
+    - PRESTD_USERNAME/PASSWORD sinon : JWTAuth, login paresseux au premier
+      appel et re-login automatique sur 401 (token expiré).
+    - Ni l'un ni l'autre : pas d'auth (prestd tourne sans PREST_AUTH_ENABLED).
+    """
+    if settings.prestd_static_token:
+        return StaticTokenAuth(settings.prestd_static_token)
+    if settings.prestd_username and settings.prestd_password:
+        return JWTAuth(settings.prestd_username, settings.prestd_password)
+    return None
 
 
 @asynccontextmanager
@@ -32,16 +49,8 @@ async def lifespan(app: FastAPI):
         default_database=settings.prestd_database,
         default_schema=settings.prestd_schema,
         timeout=settings.prestd_timeout_seconds,
+        auth=_build_auth(),
     )
-    if settings.prestd_static_token:
-        client.set_token(settings.prestd_static_token)
-    elif settings.prestd_username and settings.prestd_password:
-        try:
-            await client.login(settings.prestd_username, settings.prestd_password)
-            logger.info("Connecté à prestd en tant que %s", settings.prestd_username)
-        except PrestdError as exc:
-            logger.warning("Login prestd impossible au démarrage : %s", exc)
-
     app.state.prestd_client = client
     try:
         yield
