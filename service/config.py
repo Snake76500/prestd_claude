@@ -27,6 +27,16 @@ class Settings(BaseSettings):
     # interne de confiance / reverse-proxy Caddy).
     service_api_key: str | None = None
 
+    # -- auth Keycloak & permissions ----------------------------------------
+    keycloak_enabled: bool = True
+    keycloak_server_url: str | None = None
+    keycloak_realm: str = "master"
+    keycloak_client_id: str | None = None
+    keycloak_public_key: str | None = None  # Clé publique PEM / RSA ou secret HMAC
+    keycloak_audience: str | None = None
+    keycloak_admin_roles: list[str] = ["admin", "realm-admin", "superuser"]
+    keycloak_algorithms: list[str] = ["RS256", "HS256"]
+
     # -- divers ---------------------------------------------------------------
     cors_allow_origins: list[str] = ["*"]
     log_level: str = "INFO"

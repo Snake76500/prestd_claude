@@ -22,6 +22,7 @@ from prestd_client import BaseAuth, JWTAuth, PrestdClient, PrestdError, StaticTo
 
 from .config import settings
 from .routers import health, meta, records
+from .security import KeycloakPermissionMiddleware
 
 logging.basicConfig(level=settings.log_level)
 logger = logging.getLogger("prestd_service")
@@ -73,6 +74,8 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    app.add_middleware(KeycloakPermissionMiddleware)
 
     @app.exception_handler(PrestdError)
     async def prestd_error_handler(request: Request, exc: PrestdError) -> JSONResponse:

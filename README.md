@@ -202,6 +202,26 @@ Endpoints exposés :
 Si `SERVICE_API_KEY` est définie dans l'environnement, toutes les routes
 `/meta/*` et `/tables/*` exigent l'en-tête `X-API-Key`.
 
+### Autorisation Keycloak & Contrôle d'accès par table / action
+
+Le microservice intègre un middleware `KeycloakPermissionMiddleware` qui intercepte les requêtes vers `/tables/{table}`, décode le token JWT (`Authorization: Bearer <token>`) et vérifie que l'utilisateur possède les droits sur la table et l'action demandée :
+
+| Méthode HTTP | Action vérifiée | Rôles / Scopes compatibles |
+|---|---|---|
+| `GET`, `HEAD` | `read` | `<table>:read`, `<table>:*`, `*:read`, `*:*`, `admin` |
+| `POST` | `write` | `<table>:write`, `<table>:*`, `*:write`, `*:*`, `admin` |
+| `PUT`, `PATCH` | `write` | `<table>:write`, `<table>:*`, `*:write`, `*:*`, `admin` |
+| `DELETE` | `delete` | `<table>:delete`, `<table>:write`, `<table>:*`, `*:delete`, `*:*`, `admin` |
+
+**Structures Keycloak prises en charge :**
+1. **Rôles Realm & Client** : rôles granulaires au format `<table>:<action>` (ex : `users:read`, `orders:write`), ou rôles admin (`admin`, `realm-admin`, `superuser`).
+2. **Keycloak Authorization Services (UMA)** : claim `authorization.permissions` avec `rsname` (nom de la table) et `scopes` (ex : `["read", "write"]`).
+
+En cas d'absence de token ou token expiré : `401 Unauthorized`.  
+En cas de droits insuffisants : `403 Forbidden` (`{"error": "Permission denied for action 'write' on table 'users'"}`).
+
+Les routes publiques (`/healthz`, `/readyz`, `/docs`, `/openapi.json`) sont automatiquement exemptées.
+
 Côté connexion à prestd, le microservice choisit automatiquement une
 stratégie du middleware d'auth (`service/main.py::_build_auth`) :
 `PRESTD_STATIC_TOKEN` si fourni, sinon `JWTAuth` à partir de

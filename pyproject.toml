@@ -19,6 +19,8 @@ service = [
     "fastapi>=0.111",
     "uvicorn[standard]>=0.30",
     "pydantic-settings>=2.3",
+    "pyjwt[crypto]>=2.8.0",
+    "cryptography>=42.0.0",
 ]
 dev = [
     "pytest>=8.0",

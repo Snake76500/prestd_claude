@@ -21,3 +21,9 @@ async def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="X-API-Key manquante ou invalide"
         )
+
+
+def get_current_user(request: Request):
+    """Récupère le UserContext injecté par le middleware KeycloakPermissionMiddleware."""
+    return getattr(request.state, "user", None)
+
