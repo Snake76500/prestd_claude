@@ -14,8 +14,8 @@ def get_client(request: Request) -> PrestdClient:
 
 
 async def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
-    """Protège les routes avec `X-API-Key`. Désactivé si SERVICE_API_KEY n'est pas défini."""
-    if settings.service_api_key is None:
+    """Protège les routes avec `X-API-Key`. Désactivé si SERVICE_API_KEY n'est pas défini ou vide."""
+    if not settings.service_api_key:
         return
     if x_api_key != settings.service_api_key:
         raise HTTPException(
