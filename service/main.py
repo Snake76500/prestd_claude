@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from prestd_client import BaseAuth, JWTAuth, PrestdClient, PrestdError, StaticTokenAuth
@@ -92,30 +93,15 @@ def create_app() -> FastAPI:
 
     @app.get("/docs", include_in_schema=False)
     async def custom_swagger_ui_html() -> HTMLResponse:
-        html_content = """<!DOCTYPE html>
-<html>
-<head>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<link type="text/css" rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
-<link rel="shortcut icon" href="https://fastapi.tiangolo.com/img/favicon.png">
-<title>prestd microservice - Swagger UI</title>
-</head>
-<body>
-<div id="swagger-ui"></div>
-<script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
-<script>
-const ui = SwaggerUIBundle({
-    url: '/openapi.json',
-    dom_id: "#swagger-ui",
-    layout: "BaseLayout",
-    deepLinking: true,
-    showExtensions: true,
-    showCommonExtensions: true,
-    presets: [
-        SwaggerUIBundle.presets.apis,
-        SwaggerUIBundle.SwaggerUIStandalonePreset
-    ],
-    requestInterceptor: (req) => {
+        res = get_swagger_ui_html(
+            openapi_url=app.openapi_url or "/openapi.json",
+            title=f"{app.title} - Swagger UI",
+        )
+        html = res.body.decode("utf-8")
+        js_hook = """<script>
+if (typeof ui !== 'undefined' && ui.getConfigs) {
+    const origInterceptor = ui.getConfigs().requestInterceptor;
+    ui.getConfigs().requestInterceptor = (req) => {
         if (req.url && req.url.indexOf('filter') !== -1) {
             try {
                 const isAbsolute = req.url.startsWith('http://') || req.url.startsWith('https://');
@@ -128,9 +114,7 @@ const ui = SwaggerUIBundle({
                     if (key === 'filter' || key.startsWith('filter[') || key.startsWith('filter%')) {
                         if (val.indexOf('=') !== -1) {
                             const idx = val.indexOf('=');
-                            const fName = val.substring(0, idx).trim();
-                            const fVal = val.substring(idx + 1).trim();
-                            newParams.append(fName, fVal);
+                            newParams.append(val.substring(0, idx).trim(), val.substring(idx + 1).trim());
                         } else if (val.indexOf(':') !== -1) {
                             const parts = val.split(':');
                             if (parts.length === 3) {
@@ -147,22 +131,17 @@ const ui = SwaggerUIBundle({
                     }
                 }
                 urlObj.search = newParams.toString();
-                if (isAbsolute) {
-                    req.url = urlObj.toString();
-                } else {
-                    req.url = urlObj.pathname + (urlObj.search ? urlObj.search : '');
-                }
+                req.url = isAbsolute ? urlObj.toString() : (urlObj.pathname + (urlObj.search ? urlObj.search : ''));
             } catch (e) {
                 console.error("Swagger requestInterceptor error:", e);
             }
         }
-        return req;
-    }
-});
+        return origInterceptor ? origInterceptor(req) : req;
+    };
+}
 </script>
-</body>
-</html>"""
-        return HTMLResponse(content=html_content)
+</body>"""
+        return HTMLResponse(content=html.replace("</body>", js_hook))
 
     app.include_router(health.router)
     app.include_router(meta.router)
