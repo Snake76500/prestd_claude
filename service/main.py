@@ -116,13 +116,16 @@ const ui = SwaggerUIBundle({
         SwaggerUIBundle.SwaggerUIStandalonePreset
     ],
     requestInterceptor: (req) => {
-        if (req.url && (req.url.indexOf('filter=') !== -1 || req.url.indexOf('filter%3D') !== -1)) {
+        if (req.url && req.url.indexOf('filter') !== -1) {
             try {
+                const isAbsolute = req.url.startsWith('http://') || req.url.startsWith('https://');
                 const urlObj = new URL(req.url, window.location.origin);
                 const params = new URLSearchParams(urlObj.search);
                 const newParams = new URLSearchParams();
-                for (const [key, val] of params.entries()) {
-                    if (key === 'filter') {
+                for (const [rawKey, rawVal] of params.entries()) {
+                    const key = decodeURIComponent(rawKey);
+                    const val = decodeURIComponent(rawVal);
+                    if (key === 'filter' || key.startsWith('filter[') || key.startsWith('filter%')) {
                         if (val.indexOf('=') !== -1) {
                             const idx = val.indexOf('=');
                             const fName = val.substring(0, idx).trim();
@@ -136,7 +139,7 @@ const ui = SwaggerUIBundle({
                             } else {
                                 newParams.append(parts[0].trim(), parts[1].trim());
                             }
-                        } else {
+                        } else if (val) {
                             newParams.append(val, '');
                         }
                     } else {
@@ -144,7 +147,7 @@ const ui = SwaggerUIBundle({
                     }
                 }
                 urlObj.search = newParams.toString();
-                if (req.url.startsWith('http://') || req.url.startsWith('https://')) {
+                if (isAbsolute) {
                     req.url = urlObj.toString();
                 } else {
                     req.url = urlObj.pathname + (urlObj.search ? urlObj.search : '');
