@@ -98,50 +98,61 @@ def create_app() -> FastAPI:
             title=f"{app.title} - Swagger UI",
         )
         html = res.body.decode("utf-8")
-        js_hook = """<script>
-if (typeof ui !== 'undefined' && ui.getConfigs) {
-    const origInterceptor = ui.getConfigs().requestInterceptor;
-    ui.getConfigs().requestInterceptor = (req) => {
-        if (req.url && req.url.indexOf('filter') !== -1) {
-            try {
-                const isAbsolute = req.url.startsWith('http://') || req.url.startsWith('https://');
-                const urlObj = new URL(req.url, window.location.origin);
-                const params = new URLSearchParams(urlObj.search);
-                const newParams = new URLSearchParams();
-                for (const [rawKey, rawVal] of params.entries()) {
-                    const key = decodeURIComponent(rawKey);
-                    const val = decodeURIComponent(rawVal);
-                    if (key === 'filter' || key.startsWith('filter[') || key.startsWith('filter%')) {
-                        if (val.indexOf('=') !== -1) {
-                            const idx = val.indexOf('=');
-                            newParams.append(val.substring(0, idx).trim(), val.substring(idx + 1).trim());
-                        } else if (val.indexOf(':') !== -1) {
-                            const parts = val.split(':');
-                            if (parts.length === 3) {
-                                const op = parts[1].startsWith('$') ? parts[1] : '$' + parts[1];
-                                newParams.append(parts[0].trim(), op + '.' + parts[2].trim());
-                            } else {
-                                newParams.append(parts[0].trim(), parts[1].trim());
+        wrapper_script = """<script>
+    const _origSwaggerUIBundle = window.SwaggerUIBundle;
+    window.SwaggerUIBundle = function(options) {
+        options.requestInterceptor = (req) => {
+            if (req.url && req.url.indexOf('filter') !== -1) {
+                try {
+                    const isAbsolute = req.url.startsWith('http://') || req.url.startsWith('https://');
+                    const urlObj = new URL(req.url, window.location.origin);
+                    const params = new URLSearchParams(urlObj.search);
+                    const newParams = new URLSearchParams();
+                    for (const [rawKey, rawVal] of params.entries()) {
+                        const key = decodeURIComponent(rawKey);
+                        const val = decodeURIComponent(rawVal);
+                        if (key === 'filter' || key.startsWith('filter[') || key.startsWith('filter%')) {
+                            if (val.indexOf('=') !== -1) {
+                                const idx = val.indexOf('=');
+                                newParams.append(val.substring(0, idx).trim(), val.substring(idx + 1).trim());
+                            } else if (val.indexOf(':') !== -1) {
+                                const parts = val.split(':');
+                                if (parts.length === 3) {
+                                    const op = parts[1].startsWith('$') ? parts[1] : '$' + parts[1];
+                                    newParams.append(parts[0].trim(), op + '.' + parts[2].trim());
+                                } else {
+                                    newParams.append(parts[0].trim(), parts[1].trim());
+                                }
+                            } else if (val) {
+                                newParams.append(val, '');
                             }
-                        } else if (val) {
-                            newParams.append(val, '');
+                        } else {
+                            newParams.append(key, val);
                         }
-                    } else {
-                        newParams.append(key, val);
                     }
+                    urlObj.search = newParams.toString();
+                    req.url = isAbsolute ? urlObj.toString() : (urlObj.pathname + (urlObj.search ? urlObj.search : ''));
+                } catch (e) {
+                    console.error("Swagger requestInterceptor error:", e);
                 }
-                urlObj.search = newParams.toString();
-                req.url = isAbsolute ? urlObj.toString() : (urlObj.pathname + (urlObj.search ? urlObj.search : ''));
-            } catch (e) {
-                console.error("Swagger requestInterceptor error:", e);
             }
-        }
-        return origInterceptor ? origInterceptor(req) : req;
+            return req;
+        };
+        return _origSwaggerUIBundle.call(this, options);
     };
-}
-</script>
-</body>"""
-        return HTMLResponse(content=html.replace("</body>", js_hook))
+    for (const prop in _origSwaggerUIBundle) {
+        if (Object.prototype.hasOwnProperty.call(_origSwaggerUIBundle, prop)) {
+            window.SwaggerUIBundle[prop] = _origSwaggerUIBundle[prop];
+        }
+    }
+    </script>
+    <!-- `SwaggerUIBundle` is now available on the page -->"""
+        return HTMLResponse(
+            content=html.replace(
+                "<!-- `SwaggerUIBundle` is now available on the page -->",
+                wrapper_script,
+            )
+        )
 
     app.include_router(health.router)
     app.include_router(meta.router)
