@@ -22,10 +22,19 @@ RESERVED_QUERY_PARAMS = {"filter"}
 def _extract_filters(
     request: Request,
     filter_params: list[str] | str | None = None,
+    _select: str | None = None,
+    _order: str | None = None,
+    _page: int | None = None,
+    _page_size: int | None = None,
+    _distinct: bool | None = None,
+    _groupby: str | None = None,
+    _count: str | None = None,
+    _or: str | None = None,
 ) -> dict[str, str]:
     """Extrait et combine tous les filtres :
     1. Paramètres directs passés dans la query string (ex: ?user=$eq.TOTO&age=$gte.18)
     2. Saisie explicite dans Swagger via le paramètre `filter` (ex: filter='user=$eq.TOTO')
+    3. Paramètres système explicitement renseignés dans Swagger (_page, _page_size, etc.)
     """
     filters: dict[str, str] = {}
 
@@ -52,7 +61,27 @@ def _extract_filters(
                     filters[field.strip()] = f"{op_clean}.{val.strip()}"
                 elif len(parts) == 2:
                     field, val = parts
-    # 3. Normalisation des alias de pagination
+                    filters[field.strip()] = val.strip()
+
+    # 3. Paramètres système FastAPI explicites (s'ils n'ont pas été remplacés par filter)
+    if _select and "_select" not in filters:
+        filters["_select"] = _select
+    if _order and "_order" not in filters:
+        filters["_order"] = _order
+    if _page is not None and "_page" not in filters:
+        filters["_page"] = str(_page)
+    if _page_size is not None and "_page_size" not in filters:
+        filters["_page_size"] = str(_page_size)
+    if _distinct is not None and "_distinct" not in filters:
+        filters["_distinct"] = "true" if _distinct else "false"
+    if _groupby and "_groupby" not in filters:
+        filters["_groupby"] = _groupby
+    if _count and "_count" not in filters:
+        filters["_count"] = _count
+    if _or and "_or" not in filters:
+        filters["_or"] = _or
+
+    # 4. Normalisation des alias de pagination
     if "page" in filters and "_page" not in filters:
         filters["_page"] = filters.pop("page")
     if "page_size" in filters and "_page_size" not in filters:
@@ -156,7 +185,18 @@ async def list_rows(
 ):
     """Liste/filtre des lignes de la table (base par défaut)."""
     qb = client.table(table)
-    filters = _extract_filters(request, filter_params=filter)
+    filters = _extract_filters(
+        request,
+        filter_params=filter,
+        _select=_select,
+        _order=_order,
+        _page=_page,
+        _page_size=_page_size,
+        _distinct=_distinct,
+        _groupby=_groupby,
+        _count=_count,
+        _or=_or,
+    )
     for field, value in filters.items():
         qb.filter(field, value)
     return await qb.execute()
@@ -262,7 +302,18 @@ async def list_datasource_schema_rows(
 ):
     """Liste/filtre des lignes pour un datasource et un schéma spécifiques."""
     qb = client.table(table, datasource=datasource, schema=schema)
-    filters = _extract_filters(request, filter_params=filter)
+    filters = _extract_filters(
+        request,
+        filter_params=filter,
+        _select=_select,
+        _order=_order,
+        _page=_page,
+        _page_size=_page_size,
+        _distinct=_distinct,
+        _groupby=_groupby,
+        _count=_count,
+        _or=_or,
+    )
     for field, value in filters.items():
         qb.filter(field, value)
     return await qb.execute()
