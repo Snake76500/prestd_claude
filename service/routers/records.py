@@ -1,7 +1,7 @@
 import math
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Body, Depends, Query, Request
 
 from prestd_client import PrestdClient
 
@@ -215,6 +215,38 @@ Vous pouvez saisir vos filtres dans le champ **`filter`** de Swagger ou directem
 * `_or` : Combinaison OU logique (ex: `_or=name=$ilike.%TOTO%||email=$ilike.%TOTO%`)
 """
 
+PREST_CREATE_DOC = """
+Insère un ou plusieurs enregistrements dans une table PostgreSQL via prestd.
+
+---
+
+### 📦 Format du payload (Corps de la requête / Body)
+Le `payload` JSON transmis dans le body peut prendre deux formes :
+
+1. **Insertion d'une ligne unique (Objet JSON)** :
+   ```json
+   {
+     "name": "Alice",
+     "email": "alice@example.com",
+     "role": "admin",
+     "active": true
+   }
+   ```
+
+2. **Insertion en lot / Batch Insert (Liste d'objets JSON)** :
+   ```json
+   [
+     { "name": "Bob", "email": "bob@example.com", "role": "user" },
+     { "name": "Charlie", "email": "charlie@example.com", "role": "editor" }
+   ]
+   ```
+
+---
+
+### ⚡ Réponses
+* **201 Created** : Renvoie le ou les enregistrements créés avec leurs identifiants auto-générés.
+"""
+
 PREST_UPDATE_DOC = """
 Mise à jour d'un ou plusieurs enregistrements filtrés d'une table PostgreSQL via prestd.
 
@@ -316,10 +348,36 @@ async def list_rows(
     return await _execute_paginated_get(qb, client, table, filters)
 
 
-@router.post("/tables/{table}", status_code=201)
+@router.post(
+    "/tables/{table}",
+    status_code=201,
+    summary="Créer un ou plusieurs enregistrements (base par défaut)",
+    description=PREST_CREATE_DOC,
+)
 async def create_row(
     table: str,
-    payload: dict[str, Any] | list[dict[str, Any]],
+    payload: dict[str, Any] | list[dict[str, Any]] = Body(
+        ...,
+        description="Données à insérer : un objet JSON (ligne unique) ou une liste d'objets (insertion en lot)",
+        openapi_examples={
+            "ligne_unique": {
+                "summary": "Insertion d'une ligne unique",
+                "value": {
+                    "name": "Alice",
+                    "email": "alice@example.com",
+                    "role": "admin",
+                    "active": True,
+                },
+            },
+            "insertion_lot": {
+                "summary": "Insertion en lot (Batch Insert)",
+                "value": [
+                    {"name": "Bob", "email": "bob@example.com", "role": "user"},
+                    {"name": "Charlie", "email": "charlie@example.com", "role": "editor"},
+                ],
+            },
+        },
+    ),
     client: PrestdClient = Depends(get_client),
 ):
     """Insertion dans la table (base par défaut). `payload` peut être un objet (une ligne) ou une liste (en lot)."""
@@ -492,14 +550,40 @@ async def list_datasource_rows(
     return await _execute_paginated_get(qb, client, table, filters, datasource=datasource)
 
 
-@router.post("/datasource/{datasource}/schema/{schema}/table/{table}", status_code=201)
+@router.post(
+    "/datasource/{datasource}/schema/{schema}/table/{table}",
+    status_code=201,
+    summary="Créer un ou plusieurs enregistrements (datasource & schéma explicites)",
+    description=PREST_CREATE_DOC,
+)
 @router.post("/datasource/{datasource}/schema/{schema}/tables/{table}", include_in_schema=False, status_code=201)
 @router.post("/datasources/{datasource}/schemas/{schema}/tables/{table}", include_in_schema=False, status_code=201)
 async def create_datasource_schema_row(
     datasource: str,
     schema: str,
     table: str,
-    payload: dict[str, Any] | list[dict[str, Any]],
+    payload: dict[str, Any] | list[dict[str, Any]] = Body(
+        ...,
+        description="Données à insérer : un objet JSON (ligne unique) ou une liste d'objets (insertion en lot)",
+        openapi_examples={
+            "ligne_unique": {
+                "summary": "Insertion d'une ligne unique",
+                "value": {
+                    "name": "Alice",
+                    "email": "alice@example.com",
+                    "role": "admin",
+                    "active": True,
+                },
+            },
+            "insertion_lot": {
+                "summary": "Insertion en lot (Batch Insert)",
+                "value": [
+                    {"name": "Bob", "email": "bob@example.com", "role": "user"},
+                    {"name": "Charlie", "email": "charlie@example.com", "role": "editor"},
+                ],
+            },
+        },
+    ),
     client: PrestdClient = Depends(get_client),
 ):
     """Insertion dans une table pour un datasource et schéma spécifiques (`payload` unique ou liste)."""
