@@ -16,8 +16,8 @@ from .permissions import check_table_permission, resolve_action
 
 logger = logging.getLogger("prestd_service.security.middleware")
 
-# Regex pour extraire le nom de la table sur les routes `/tables/{table}` et `/datasource/{datasource}/{table}`
-TABLE_ROUTE_PATTERN = re.compile(r"^(?:/datasources?/[^/?#]+(?:/tables)?|/tables)/([^/?#]+)")
+# Regex pour extraire le nom de la table sur les routes `/tables/{table}` et `/datasource/{datasource}/schema/{schema}/table/{table}`
+TABLE_ROUTE_PATTERN = re.compile(r"^(?:/datasources?/[^/?#]+(?:/schemas?/[^/?#]+)?(?:/tables?)?|/tables)/([^/?#]+)")
 
 # Routes publiques exemptées de vérification d'authentification
 DEFAULT_EXEMPT_PATHS = {

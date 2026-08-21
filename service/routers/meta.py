@@ -31,8 +31,10 @@ async def describe_table(table: str, client: PrestdClient = Depends(get_client))
     return await client.describe_table(table)
 
 
+@router.get("/datasource/{datasource}/schema/{schema}/table/{table}")
 @router.get("/datasource/{datasource}/tables/{table}")
 @router.get("/datasources/{datasource}/tables/{table}", include_in_schema=False)
+@router.get("/datasources/{datasource}/schemas/{schema}/tables/{table}", include_in_schema=False)
 async def describe_datasource_table(
     datasource: str,
     table: str,

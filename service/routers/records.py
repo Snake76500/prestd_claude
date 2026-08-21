@@ -79,11 +79,79 @@ async def delete_rows(table: str, request: Request, client: PrestdClient = Depen
 
 
 # ==============================================================================
-# Routes avec datasource explicite (/datasource/{datasource}/{table})
+# Routes avec datasource et schéma explicites (/datasource/{datasource}/schema/{schema}/table/{table})
 # ==============================================================================
 
 
-@router.get("/datasource/{datasource}/{table}")
+@router.get("/datasource/{datasource}/schema/{schema}/table/{table}")
+@router.get("/datasource/{datasource}/schema/{schema}/tables/{table}", include_in_schema=False)
+@router.get("/datasources/{datasource}/schemas/{schema}/tables/{table}", include_in_schema=False)
+async def list_datasource_schema_rows(
+    datasource: str,
+    schema: str,
+    table: str,
+    request: Request,
+    client: PrestdClient = Depends(get_client),
+):
+    """Liste/filtre des lignes pour un datasource et un schéma spécifiques. Tout paramètre prestd fonctionne :
+    `_page`, `_page_size`, `_select`, `_order`, `_or`, ou des filtres `champ=$operateur.valeur`."""
+    qb = client.table(table, datasource=datasource, schema=schema)
+    for field, value in _forwarded_params(request).items():
+        qb.filter(field, value)
+    return await qb.execute()
+
+
+@router.post("/datasource/{datasource}/schema/{schema}/table/{table}", status_code=201)
+@router.post("/datasource/{datasource}/schema/{schema}/tables/{table}", include_in_schema=False, status_code=201)
+@router.post("/datasources/{datasource}/schemas/{schema}/tables/{table}", include_in_schema=False, status_code=201)
+async def create_datasource_schema_row(
+    datasource: str,
+    schema: str,
+    table: str,
+    payload: dict[str, Any] | list[dict[str, Any]],
+    client: PrestdClient = Depends(get_client),
+):
+    """Insertion dans une table pour un datasource et schéma spécifiques (`payload` unique ou liste)."""
+    return await client.insert(table, payload, datasource=datasource, schema=schema)
+
+
+@router.patch("/datasource/{datasource}/schema/{schema}/table/{table}")
+@router.patch("/datasource/{datasource}/schema/{schema}/tables/{table}", include_in_schema=False)
+@router.patch("/datasources/{datasource}/schemas/{schema}/tables/{table}", include_in_schema=False)
+async def update_datasource_schema_rows(
+    datasource: str,
+    schema: str,
+    table: str,
+    payload: dict[str, Any],
+    request: Request,
+    client: PrestdClient = Depends(get_client),
+):
+    """Mise à jour filtrée dans une table pour un datasource et schéma spécifiques. Au moins un filtre est requis."""
+    filters = _forwarded_params(request)
+    return await client.update(table, payload, filters, datasource=datasource, schema=schema)
+
+
+@router.delete("/datasource/{datasource}/schema/{schema}/table/{table}")
+@router.delete("/datasource/{datasource}/schema/{schema}/tables/{table}", include_in_schema=False)
+@router.delete("/datasources/{datasource}/schemas/{schema}/tables/{table}", include_in_schema=False)
+async def delete_datasource_schema_rows(
+    datasource: str,
+    schema: str,
+    table: str,
+    request: Request,
+    client: PrestdClient = Depends(get_client),
+):
+    """Suppression filtrée par la query string pour un datasource et schéma spécifiques. Au moins un filtre est requis."""
+    filters = _forwarded_params(request)
+    return await client.delete(table, filters, datasource=datasource, schema=schema)
+
+
+# ==============================================================================
+# Alias de compatibilité (/datasource/{datasource}/{table})
+# ==============================================================================
+
+
+@router.get("/datasource/{datasource}/{table}", include_in_schema=False)
 @router.get("/datasource/{datasource}/tables/{table}", include_in_schema=False)
 @router.get("/datasources/{datasource}/{table}", include_in_schema=False)
 @router.get("/datasources/{datasource}/tables/{table}", include_in_schema=False)
@@ -93,15 +161,13 @@ async def list_datasource_rows(
     request: Request,
     client: PrestdClient = Depends(get_client),
 ):
-    """Liste/filtre des lignes pour un datasource spécifique. Tout paramètre prestd fonctionne :
-    `_page`, `_page_size`, `_select`, `_order`, `_or`, ou des filtres `champ=$operateur.valeur`."""
     qb = client.table(table, datasource=datasource)
     for field, value in _forwarded_params(request).items():
         qb.filter(field, value)
     return await qb.execute()
 
 
-@router.post("/datasource/{datasource}/{table}", status_code=201)
+@router.post("/datasource/{datasource}/{table}", status_code=201, include_in_schema=False)
 @router.post("/datasource/{datasource}/tables/{table}", include_in_schema=False, status_code=201)
 @router.post("/datasources/{datasource}/{table}", include_in_schema=False, status_code=201)
 @router.post("/datasources/{datasource}/tables/{table}", include_in_schema=False, status_code=201)
@@ -111,11 +177,10 @@ async def create_datasource_row(
     payload: dict[str, Any] | list[dict[str, Any]],
     client: PrestdClient = Depends(get_client),
 ):
-    """Insertion dans une table pour un datasource spécifique (`payload` unique ou liste)."""
     return await client.insert(table, payload, datasource=datasource)
 
 
-@router.patch("/datasource/{datasource}/{table}")
+@router.patch("/datasource/{datasource}/{table}", include_in_schema=False)
 @router.patch("/datasource/{datasource}/tables/{table}", include_in_schema=False)
 @router.patch("/datasources/{datasource}/{table}", include_in_schema=False)
 @router.patch("/datasources/{datasource}/tables/{table}", include_in_schema=False)
@@ -126,12 +191,11 @@ async def update_datasource_rows(
     request: Request,
     client: PrestdClient = Depends(get_client),
 ):
-    """Mise à jour filtrée dans une table pour un datasource spécifique. Au moins un filtre est requis."""
     filters = _forwarded_params(request)
     return await client.update(table, payload, filters, datasource=datasource)
 
 
-@router.delete("/datasource/{datasource}/{table}")
+@router.delete("/datasource/{datasource}/{table}", include_in_schema=False)
 @router.delete("/datasource/{datasource}/tables/{table}", include_in_schema=False)
 @router.delete("/datasources/{datasource}/{table}", include_in_schema=False)
 @router.delete("/datasources/{datasource}/tables/{table}", include_in_schema=False)
@@ -141,6 +205,5 @@ async def delete_datasource_rows(
     request: Request,
     client: PrestdClient = Depends(get_client),
 ):
-    """Suppression filtrée par la query string pour un datasource spécifique. Au moins un filtre est requis."""
     filters = _forwarded_params(request)
     return await client.delete(table, filters, datasource=datasource)

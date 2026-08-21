@@ -383,17 +383,17 @@ Endpoints exposés :
 | POST | `/tables/{table}` | insertion (base par défaut) |
 | PATCH | `/tables/{table}?id=...` | mise à jour filtrée (base par défaut) |
 | DELETE | `/tables/{table}?id=...` | suppression filtrée (base par défaut) |
-| GET | `/datasource/{datasource}/{table}?...` | liste/filtre pour un datasource spécifique |
-| POST | `/datasource/{datasource}/{table}` | insertion pour un datasource spécifique |
-| PATCH | `/datasource/{datasource}/{table}?id=...` | mise à jour filtrée pour un datasource spécifique |
-| DELETE | `/datasource/{datasource}/{table}?id=...` | suppression filtrée pour un datasource spécifique |
+| GET | `/datasource/{datasource}/schema/{schema}/table/{table}?...` | liste/filtre pour un datasource et schéma spécifiques |
+| POST | `/datasource/{datasource}/schema/{schema}/table/{table}` | insertion pour un datasource et schéma spécifiques |
+| PATCH | `/datasource/{datasource}/schema/{schema}/table/{table}?id=...` | mise à jour filtrée pour un datasource et schéma spécifiques |
+| DELETE | `/datasource/{datasource}/schema/{schema}/table/{table}?id=...` | suppression filtrée pour un datasource et schéma spécifiques |
 
 Si `SERVICE_API_KEY` est définie dans l'environnement, toutes les routes
 `/meta/*`, `/tables/*` et `/datasource/*` exigent l'en-tête `X-API-Key`.
 
 ### Autorisation Keycloak & Contrôle d'accès par table / action
 
-Le microservice intègre un middleware `KeycloakPermissionMiddleware` qui intercepte les requêtes vers `/tables/{table}` et `/datasource/{datasource}/{table}`, décode le token JWT (`Authorization: Bearer <token>`) et vérifie que l'utilisateur possède les droits sur la table et l'action demandée :
+Le microservice intègre un middleware `KeycloakPermissionMiddleware` qui intercepte les requêtes vers `/tables/{table}` et `/datasource/{datasource}/schema/{schema}/table/{table}`, décode le token JWT (`Authorization: Bearer <token>`) et vérifie que l'utilisateur possède les droits sur la table et l'action demandée :
 
 | Méthode HTTP | Action vérifiée | Rôles / Scopes compatibles |
 |---|---|---|

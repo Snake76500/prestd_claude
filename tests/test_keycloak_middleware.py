@@ -320,39 +320,39 @@ async def test_datasource_crud_endpoints(app):
     transport = ASGITransport(app=app)
 
     with respx.mock(base_url="http://prestd-mock:3000") as prest_mock:
-        prest_mock.get("/custom_ds/public/orders").mock(
+        prest_mock.get("/custom_ds/analytics/orders").mock(
             return_value=httpx.Response(200, json=[{"id": 1, "item": "Book"}])
         )
-        prest_mock.post("/custom_ds/public/orders").mock(
+        prest_mock.post("/custom_ds/analytics/orders").mock(
             return_value=httpx.Response(201, json={"id": 2, "item": "Pen"})
         )
-        prest_mock.patch("/custom_ds/public/orders", params={"id": "2"}).mock(
+        prest_mock.patch("/custom_ds/analytics/orders", params={"id": "2"}).mock(
             return_value=httpx.Response(200, json={"id": 2, "item": "Pencil"})
         )
-        prest_mock.delete("/custom_ds/public/orders", params={"id": "2"}).mock(
+        prest_mock.delete("/custom_ds/analytics/orders", params={"id": "2"}).mock(
             return_value=httpx.Response(200, json={"deleted": 1})
         )
 
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             headers = {"Authorization": f"Bearer {token}"}
 
-            # GET
-            res_get = await client.get("/datasource/custom_ds/orders", headers=headers)
+            # GET /datasource/{datasource}/schema/{schema}/table/{table}
+            res_get = await client.get("/datasource/custom_ds/schema/analytics/table/orders", headers=headers)
             assert res_get.status_code == 200
             assert res_get.json() == [{"id": 1, "item": "Book"}]
 
-            # POST
-            res_post = await client.post("/datasource/custom_ds/orders", json={"item": "Pen"}, headers=headers)
+            # POST /datasource/{datasource}/schema/{schema}/table/{table}
+            res_post = await client.post("/datasource/custom_ds/schema/analytics/table/orders", json={"item": "Pen"}, headers=headers)
             assert res_post.status_code == 201
             assert res_post.json() == {"id": 2, "item": "Pen"}
 
-            # PATCH
-            res_patch = await client.patch("/datasource/custom_ds/orders?id=2", json={"item": "Pencil"}, headers=headers)
+            # PATCH /datasource/{datasource}/schema/{schema}/table/{table}
+            res_patch = await client.patch("/datasource/custom_ds/schema/analytics/table/orders?id=2", json={"item": "Pencil"}, headers=headers)
             assert res_patch.status_code == 200
             assert res_patch.json() == {"id": 2, "item": "Pencil"}
 
-            # DELETE
-            res_del = await client.delete("/datasource/custom_ds/orders?id=2", headers=headers)
+            # DELETE /datasource/{datasource}/schema/{schema}/table/{table}
+            res_del = await client.delete("/datasource/custom_ds/schema/analytics/table/orders?id=2", headers=headers)
             assert res_del.status_code == 200
             assert res_del.json() == {"deleted": 1}
 
