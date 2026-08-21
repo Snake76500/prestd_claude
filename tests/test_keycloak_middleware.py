@@ -436,3 +436,13 @@ async def test_swagger_filter_parameter(app):
             assert res_del.status_code == 200
             assert res_del.json() == {"deleted": 1}
 
+
+@pytest.mark.asyncio
+async def test_docs_page(app):
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.get("/docs")
+        assert res.status_code == 200
+        assert "requestInterceptor" in res.text
+        assert "SwaggerUIBundle" in res.text
+
