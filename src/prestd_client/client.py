@@ -88,6 +88,11 @@ class PrestdClient:
 
         Un token posé ici a priorité sur le middleware `auth=...` éventuellement
         configuré — utile pour un override ponctuel.
+
+        Exemple :
+        ```python
+        client.set_token("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...")
+        ```
         """
         self._token = token
 
@@ -98,6 +103,12 @@ class PrestdClient:
         Toujours disponible pour un login explicite ponctuel. Pour un
         renouvellement automatique du token en cas d'expiration (401), passez
         plutôt `auth=JWTAuth(username, password)` au constructeur.
+
+        Exemple :
+        ```python
+        token = await client.login("prest", "prest")
+        # -> "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+        ```
         """
         resp = await self._raw_request(
             "POST", "/auth", json={"username": username, "password": password}
@@ -112,31 +123,123 @@ class PrestdClient:
 
     # -- découverte du schéma ---------------------------------------------
     async def health(self) -> Any:
+        """GET /_health — Vérifie la santé basique du serveur prestd.
+
+        Exemple :
+        ```python
+        status = await client.health()
+        # -> {"status": "ok"}
+        ```
+        """
         return await self._request("GET", "/_health")
 
     async def ready(self) -> Any:
+        """GET /_ready — Vérifie si prestd est prêt (connexion base de données active).
+
+        Exemple :
+        ```python
+        readiness = await client.ready()
+        # -> {"status": "ok"}
+        ```
+        """
         return await self._request("GET", "/_ready")
 
     async def databases(self) -> list[dict[str, Any]]:
+        """GET /databases — Liste toutes les bases de données accessibles.
+
+        Exemple :
+        ```python
+        dbs = await client.databases()
+        # -> [{"datname": "postgres"}, {"datname": "prest"}]
+        ```
+        """
         return await self._request("GET", "/databases")
 
     async def schemas(self) -> list[dict[str, Any]]:
+        """GET /schemas — Liste tous les schémas disponibles.
+
+        Exemple :
+        ```python
+        schemas = await client.schemas()
+        # -> [{"schema_name": "public"}, {"schema_name": "auth"}]
+        ```
+        """
         return await self._request("GET", "/schemas")
 
     async def tables(self) -> list[dict[str, Any]]:
+        """GET /tables — Liste toutes les tables accessibles.
+
+        Exemple :
+        ```python
+        tables = await client.tables()
+        # -> [{"table_name": "users"}, {"table_name": "orders"}]
+        ```
+        """
         return await self._request("GET", "/tables")
 
     async def describe_table(
-        self, table: str, *, database: str | None = None, schema: str | None = None
+        self,
+        table: str,
+        *,
+        datasource: str | None = None,
+        database: str | None = None,
+        schema: str | None = None,
     ) -> list[dict[str, Any]]:
-        """GET /show/{database}/{schema}/{table} — structure de la table (colonnes, types...)."""
-        db, sch = self._resolve(database, schema)
+        """GET /show/{database}/{schema}/{table} — Structure de la table (colonnes, types...).
+
+        Exemples :
+        ```python
+        # Utilise la base/datasource par défaut configurée sur le client
+        columns = await client.describe_table("users")
+
+        # Avec schéma et base explicites
+        columns = await client.describe_table(
+            "users", database="mydb", schema="public"
+        )
+        # -> [{"column_name": "id", "data_type": "integer"}, {"column_name": "name", "data_type": "text"}]
+        ```
+        """
+        db, sch = self._resolve(database=database, schema=schema, datasource=datasource)
         return await self._request("GET", f"/show/{db}/{sch}/{table}")
 
     # -- CRUD ----------------------------------------------------------------
-    def table(self, table: str, *, database: str | None = None, schema: str | None = None) -> QueryBuilder:
-        """Point d'entrée fluide : `client.table("users").eq("active", True).execute()`."""
-        db, sch = self._resolve(database, schema)
+    def table(
+        self,
+        table: str,
+        *,
+        datasource: str | None = None,
+        database: str | None = None,
+        schema: str | None = None,
+    ) -> QueryBuilder:
+        """Point d'entrée fluide pour requêter ou modifier une table (SELECT, INSERT, UPDATE, DELETE).
+
+        Exemples :
+        ```python
+        # 1. SELECT avec filtres et tri
+        rows = await (
+            client.table("users")
+            .eq("active", True)
+            .gt("age", 18)
+            .order("-created_at")
+            .page(1, 10)
+            .execute()
+        )
+
+        # Récupérer un seul enregistrement
+        user = await client.table("users").eq("email", "john@example.com").first()
+
+        # 2. INSERT via table() (le paramètre table n'a pas besoin d'être répété)
+        await client.table("users").insert({"name": "Alice", "role": "admin"})
+        await client.table("users").batch_insert([{"name": "Bob"}, {"name": "Charlie"}])
+
+        # 3. UPDATE via table() avec filtres chaînés
+        await client.table("users").eq("id", 42).update({"active": False})
+
+        # 4. DELETE via table() avec filtres chaînés
+        await client.table("users").eq("id", 42).delete()
+        ```
+        """
+        db, sch = self._resolve(database=database, schema=schema, datasource=datasource)
         return QueryBuilder(self, db, sch, table)
 
     async def insert(
@@ -144,11 +247,44 @@ class PrestdClient:
         table: str,
         data: Mapping[str, Any] | Sequence[Mapping[str, Any]],
         *,
+        datasource: str | None = None,
         database: str | None = None,
         schema: str | None = None,
     ) -> Any:
-        """INSERT. `data` peut être un dict (une ligne) ou une liste de dicts (insertion en lot)."""
-        db, sch = self._resolve(database, schema)
+        """POST /{database}/{schema}/{table} — Insertion directe d'un ou plusieurs enregistrements.
+
+        `table` est le nom de la table cible (obligatoire en appel direct).
+        `data` peut être un dictionnaire unique (1 ligne) ou une liste de dictionnaires (lot).
+
+        Exemples :
+        ```python
+        # Insertion d'une seule ligne (nécessite le nom de la table en 1er argument)
+        new_user = await client.insert("users", {
+            "name": "Alice",
+            "email": "alice@example.com",
+            "active": True,
+        })
+
+        # Insertion multiple en une seule requête
+        new_users = await client.insert("users", [
+            {"name": "Bob", "email": "bob@example.com"},
+            {"name": "Charlie", "email": "charlie@example.com"},
+        ])
+
+        # En spécifiant la base/schéma explicitement
+        await client.insert(
+            "logs",
+            {"event": "login", "user_id": 42},
+            database="mydb",
+            schema="audit",
+        )
+
+        # Alternative fluide équivalente via table("users") :
+        await client.table("users").insert({"name": "Alice", "active": True})
+        await client.table("users").batch_insert([{"name": "Bob"}, {"name": "Charlie"}])
+        ```
+        """
+        db, sch = self._resolve(database=database, schema=schema, datasource=datasource)
         return await self._request("POST", f"/{db}/{sch}/{table}", json=data)
 
     async def update(
@@ -157,21 +293,48 @@ class PrestdClient:
         data: Mapping[str, Any],
         filters: Mapping[str, str],
         *,
+        datasource: str | None = None,
         database: str | None = None,
         schema: str | None = None,
         method: str = "PATCH",
     ) -> Any:
-        """UPDATE filtré. `filters` est un dict `{champ: valeur_ou_operateur}`.
+        """PATCH/PUT /{database}/{schema}/{table}?filters... — Mise à jour filtrée.
 
-        prestd exécute un UPDATE inconditionnel (toutes les lignes) si aucun
-        filtre n'est fourni ; ce client refuse ce cas par sécurité.
+        `filters` est un dictionnaire `{champ: valeur_ou_opérateur}` obligatoire
+        pour éviter une mise à jour accidentelle de toute la table.
+
+        Exemples :
+        ```python
+        # Mise à jour par ID simple (PATCH par défaut)
+        updated = await client.update(
+            "users",
+            data={"active": False, "role": "guest"},
+            filters={"id": "42"},
+        )
+
+        # Mise à jour avec opérateur de filtre prestd
+        from prestd_client import Op
+        await client.update(
+            "orders",
+            data={"status": "archived"},
+            filters={"created_at": Op.lt("2024-01-01")},
+        )
+
+        # Remplacement complet via PUT
+        await client.update(
+            "profiles",
+            data={"bio": "Nouvelle bio", "website": "https://example.com"},
+            filters={"user_id": "10"},
+            method="PUT",
+        )
+        ```
         """
         if not filters:
             raise ValueError(
                 "update() nécessite au moins un filtre — prestd exécute sinon un "
                 "UPDATE inconditionnel sur toutes les lignes de la table."
             )
-        db, sch = self._resolve(database, schema)
+        db, sch = self._resolve(database=database, schema=schema, datasource=datasource)
         return await self._request(method, f"/{db}/{sch}/{table}", params=dict(filters), json=data)
 
     async def delete(
@@ -179,16 +342,39 @@ class PrestdClient:
         table: str,
         filters: Mapping[str, str],
         *,
+        datasource: str | None = None,
         database: str | None = None,
         schema: str | None = None,
     ) -> Any:
-        """DELETE filtré. Même garde-fou que `update()` : filtres obligatoires."""
+        """DELETE /{database}/{schema}/{table}?filters... — Suppression filtrée.
+
+        `filters` est un dictionnaire `{champ: valeur_ou_opérateur}` obligatoire
+        pour éviter une suppression inconditionnelle de toute la table.
+
+        Exemples :
+        ```python
+        # Suppression par ID
+        await client.delete("users", filters={"id": "42"})
+
+        # Suppression par condition avec opérateur
+        from prestd_client import Op
+        await client.delete("sessions", filters={"expired_at": Op.lt("2026-01-01")})
+
+        # Suppression avec plusieurs filtres combinés
+        await client.delete(
+            "cart_items",
+            filters={"user_id": "123", "status": "abandoned"},
+            database="shop_db",
+            schema="public",
+        )
+        ```
+        """
         if not filters:
             raise ValueError(
                 "delete() nécessite au moins un filtre — prestd exécute sinon un "
                 "DELETE inconditionnel sur toutes les lignes de la table."
             )
-        db, sch = self._resolve(database, schema)
+        db, sch = self._resolve(database=database, schema=schema, datasource=datasource)
         return await self._request("DELETE", f"/{db}/{sch}/{table}", params=dict(filters))
 
     async def batch_insert(
@@ -196,11 +382,23 @@ class PrestdClient:
         table: str,
         records: Sequence[Mapping[str, Any]],
         *,
+        datasource: str | None = None,
         database: str | None = None,
         schema: str | None = None,
     ) -> Any:
-        """Sucre syntaxique : prestd accepte un tableau JSON sur le même endpoint POST."""
-        return await self.insert(table, list(records), database=database, schema=schema)
+        """POST /{database}/{schema}/{table} — Insertion en lot (sucre syntaxique pour `insert`).
+
+        Exemples :
+        ```python
+        items = [
+            {"sku": "A001", "name": "Clavier", "price": 49.99},
+            {"sku": "A002", "name": "Souris", "price": 29.99},
+            {"sku": "A003", "name": "Écran", "price": 199.99},
+        ]
+        result = await client.batch_insert("products", items)
+        ```
+        """
+        return await self.insert(table, list(records), datasource=datasource, database=database, schema=schema)
 
     # -- interne ---------------------------------------------------------------
     async def _get_rows(
@@ -211,11 +409,16 @@ class PrestdClient:
             return result
         return [result] if result else []
 
-    def _resolve(self, database: str | None, schema: str | None) -> tuple[str, str]:
-        db = database or self.default_database
+    def _resolve(
+        self,
+        database: str | None = None,
+        schema: str | None = None,
+        datasource: str | None = None,
+    ) -> tuple[str, str]:
+        db = datasource or database or self.default_database
         if not db:
             raise ValueError(
-                "Aucune database fournie et aucun default_database configuré sur PrestdClient."
+                "Aucune database ou datasource fournie et aucun default_database configuré sur PrestdClient."
             )
         sch = schema or self.default_schema
         return db, sch

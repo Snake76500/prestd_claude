@@ -165,14 +165,198 @@ prend toujours le pas sur le middleware `auth=...`.
 > mais pour un usage soutenu avec re-login fréquent sur 401, préférez
 > `PrestdClient` async directement (FastAPI, Airflow, etc.).
 
+### Exemples détaillés par endpoint
+
+#### 1. Santé et état du serveur (Health & Readiness)
+
+```python
+# GET /_health — Vérifie que le serveur prestd répond
+health = await client.health()
+# -> {"status": "ok"}
+
+# GET /_ready — Vérifie que la connexion PostgreSQL sous-jacente est active
+ready = await client.ready()
+# -> {"status": "ok"}
+```
+
+#### 2. Découverte de schéma et métadonnées
+
+```python
+# GET /databases — Liste les bases accessibles
+dbs = await client.databases()
+
+# GET /schemas — Liste les schémas
+schemas = await client.schemas()
+
+# GET /tables — Liste les tables de la base
+tables = await client.tables()
+
+# GET /show/{db}/{schema}/{table} — Structure détaillée d'une table (colonnes, types)
+columns = await client.describe_table("users")
+# Ou avec datasource / base / schéma explicites :
+columns = await client.describe_table("users", datasource="analytics_db", schema="public")
+```
+
+#### 3. Lecture et requêtes (SELECT)
+
+```python
+# GET /{db}/{schema}/{table} avec filtres, tri, pagination
+users = await (
+    client.table("users")
+    .eq("active", True)
+    .gte("age", 18)
+    .in_("role", ["admin", "editor"])
+    .order("-created_at")
+    .page(1, 20)
+    .execute()
+)
+
+# Récupérer un enregistrement unique
+user = await client.table("users").eq("id", "42").first()
+
+# Projection de colonnes spécifiques (_select)
+cols = await client.table("users").select("id", "name", "email").execute()
+
+# Comptage d'enregistrements (_count)
+total = await client.table("users").count().execute()
+
+# Recherche vectorielle pgvector (_korder, prestd >= v2.4.0)
+matches = await (
+    client.table("documents")
+    .knn_order("embedding", "<=>", [0.12, 0.45, -0.67])
+    .page(1, 5)
+    .execute()
+)
+```
+
+#### 4. Insertion simple et par lot (INSERT)
+
+Deux syntaxes équivalentes sont disponibles :
+
+```python
+# A. Syntaxe fluide via table() (recommandée)
+new_user = await client.table("users").insert({
+    "name": "Alice Dupont",
+    "email": "alice@example.com",
+    "role": "admin",
+    "active": True,
+})
+new_users = await client.table("users").batch_insert([
+    {"name": "Bob", "email": "bob@example.com"},
+    {"name": "Charlie", "email": "charlie@example.com"},
+])
+
+# B. Syntaxe directe sur le client (le nom de la table est le 1er argument obligatoire)
+new_user = await client.insert("users", {
+    "name": "Alice Dupont",
+    "email": "alice@example.com",
+    "role": "admin",
+    "active": True,
+})
+new_users = await client.batch_insert("users", [
+    {"name": "Bob", "email": "bob@example.com"},
+    {"name": "Charlie", "email": "charlie@example.com"},
+])
+
+# Spécifier base / schéma pour l'insertion
+await client.insert(
+    "audit_logs",
+    {"action": "login", "user_id": 42},
+    database="logs_db",
+    schema="audit",
+)
+```
+
+#### 5. Mise à jour (UPDATE)
+
+```python
+# A. Syntaxe fluide via table() avec filtres chaînés
+await client.table("users").eq("id", 42).update({"active": False, "role": "disabled"})
+
+# B. Syntaxe directe sur le client (table en 1er argument, filtres obligatoires)
+updated = await client.update(
+    "users",
+    data={"active": False, "role": "disabled"},
+    filters={"id": "42"},
+)
+
+# Mise à jour avec opérateur de filtre Op.*
+await client.update(
+    "orders",
+    data={"status": "archived"},
+    filters={"created_at": Op.lt("2024-01-01")},
+)
+
+# Remplacement complet via PUT
+await client.update(
+    "profiles",
+    data={"bio": "Nouvelle bio", "website": "https://example.com"},
+    filters={"user_id": "10"},
+    method="PUT",
+)
+```
+
+#### 6. Suppression (DELETE)
+
+```python
+# A. Syntaxe fluide via table() avec filtres chaînés
+await client.table("users").eq("id", 42).delete()
+
+# B. Syntaxe directe sur le client (table en 1er argument, filtres obligatoires)
+deleted = await client.delete(
+    "users",
+    filters={"id": "42"},
+)
+
+# Suppression conditionnelle avec filtres multiples ou opérateurs
+await client.delete(
+    "sessions",
+    filters={"expired_at": Op.lt("2026-01-01"), "revoked": "true"},
+)
+```
+
+#### 7. Authentification (POST /auth & Bearer Token)
+
+```python
+# Login explicite ponctuel (si PREST_AUTH_ENABLED=true)
+token = await client.login("prest", "prest")
+
+# Poser manuellement un token existant
+client.set_token("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...")
+
+# Recommandé : Middleware avec auto-refresh sur 401
+client = PrestdClient(
+    "http://localhost:3000",
+    default_database="mydb",
+    auth=JWTAuth("prest", "prest"),
+)
+```
+
 ### Façade synchrone (scripts, notebooks)
 
 ```python
-from prestd_client import SyncPrestdClient
+from prestd_client import SyncPrestdClient, Op
 
 with SyncPrestdClient("http://localhost:3000", default_database="mydb") as client:
+    # Authentification
     client.login("prest", "prest")
-    rows = client.select("users", active="true", order="-created_at", page=1, page_size=10)
+
+    # Santé & Métadonnées
+    print("Health:", client.health())
+    print("Tables:", client.tables())
+
+    # INSERT & BATCH INSERT
+    client.insert("users", {"name": "Alice", "role": "admin"})
+    client.batch_insert("users", [{"name": "Bob"}, {"name": "Charlie"}])
+
+    # SELECT
+    rows = client.select("users", active="true", role=Op.eq("admin"), order="-created_at", page=1, page_size=10)
+
+    # UPDATE
+    client.update("users", {"active": "false"}, {"id": "1"})
+
+    # DELETE
+    client.delete("users", {"id": "1"})
 ```
 
 ⚠️ `SyncPrestdClient` ouvre une boucle asyncio à chaque appel (`asyncio.run`) :
@@ -193,18 +377,23 @@ Endpoints exposés :
 | GET | `/healthz` | liveness du microservice |
 | GET | `/readyz` | + ping de prestd en amont |
 | GET | `/meta/databases`, `/meta/schemas`, `/meta/tables` | découverte de schéma |
-| GET | `/meta/tables/{table}` | structure d'une table |
-| GET | `/tables/{table}?...` | liste/filtre (syntaxe prestd transmise telle quelle) |
-| POST | `/tables/{table}` | insertion (objet ou liste) |
-| PATCH | `/tables/{table}?id=...` | mise à jour filtrée |
-| DELETE | `/tables/{table}?id=...` | suppression filtrée |
+| GET | `/meta/tables/{table}` | structure d'une table (base par défaut) |
+| GET | `/meta/datasource/{datasource}/tables/{table}` | structure d'une table pour un datasource spécifique |
+| GET | `/tables/{table}?...` | liste/filtre (base par défaut) |
+| POST | `/tables/{table}` | insertion (base par défaut) |
+| PATCH | `/tables/{table}?id=...` | mise à jour filtrée (base par défaut) |
+| DELETE | `/tables/{table}?id=...` | suppression filtrée (base par défaut) |
+| GET | `/datasource/{datasource}/{table}?...` | liste/filtre pour un datasource spécifique |
+| POST | `/datasource/{datasource}/{table}` | insertion pour un datasource spécifique |
+| PATCH | `/datasource/{datasource}/{table}?id=...` | mise à jour filtrée pour un datasource spécifique |
+| DELETE | `/datasource/{datasource}/{table}?id=...` | suppression filtrée pour un datasource spécifique |
 
 Si `SERVICE_API_KEY` est définie dans l'environnement, toutes les routes
-`/meta/*` et `/tables/*` exigent l'en-tête `X-API-Key`.
+`/meta/*`, `/tables/*` et `/datasource/*` exigent l'en-tête `X-API-Key`.
 
 ### Autorisation Keycloak & Contrôle d'accès par table / action
 
-Le microservice intègre un middleware `KeycloakPermissionMiddleware` qui intercepte les requêtes vers `/tables/{table}`, décode le token JWT (`Authorization: Bearer <token>`) et vérifie que l'utilisateur possède les droits sur la table et l'action demandée :
+Le microservice intègre un middleware `KeycloakPermissionMiddleware` qui intercepte les requêtes vers `/tables/{table}` et `/datasource/{datasource}/{table}`, décode le token JWT (`Authorization: Bearer <token>`) et vérifie que l'utilisateur possède les droits sur la table et l'action demandée :
 
 | Méthode HTTP | Action vérifiée | Rôles / Scopes compatibles |
 |---|---|---|

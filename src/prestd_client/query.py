@@ -121,10 +121,110 @@ class QueryBuilder:
         return params
 
     async def execute(self) -> list[dict[str, Any]]:
+        """Exécute la requête SELECT et renvoie la liste des résultats.
+
+        Exemple :
+        ```python
+        users = await client.table("users").eq("active", True).execute()
+        ```
+        """
         return await self._client._get_rows(
             self._database, self._schema, self._table, self._build_params()
         )
 
     async def first(self) -> dict[str, Any] | None:
+        """Exécute la requête avec LIMIT 1 (page 1, taille 1) et renvoie le premier élément ou None.
+
+        Exemple :
+        ```python
+        user = await client.table("users").eq("email", "alice@example.com").first()
+        ```
+        """
         rows = await self.page(1, 1).execute()
         return rows[0] if rows else None
+
+    async def insert(self, data: Mapping[str, Any] | Sequence[Mapping[str, Any]]) -> Any:
+        """Insère une ligne ou une liste de lignes dans la table.
+
+        Exemples :
+        ```python
+        # Insertion simple
+        await client.table("users").insert({"name": "Alice", "role": "admin"})
+
+        # Insertion multiple
+        await client.table("users").insert([{"name": "Bob"}, {"name": "Charlie"}])
+        ```
+        """
+        return await self._client.insert(
+            self._table,
+            data,
+            database=self._database,
+            schema=self._schema,
+        )
+
+    async def batch_insert(self, records: Sequence[Mapping[str, Any]]) -> Any:
+        """Insère une liste d'enregistrements en lot dans la table.
+
+        Exemple :
+        ```python
+        await client.table("users").batch_insert([{"name": "Bob"}, {"name": "Charlie"}])
+        ```
+        """
+        return await self._client.batch_insert(
+            self._table,
+            records,
+            database=self._database,
+            schema=self._schema,
+        )
+
+    async def update(
+        self,
+        data: Mapping[str, Any],
+        filters: Mapping[str, str] | None = None,
+        *,
+        method: str = "PATCH",
+    ) -> Any:
+        """Met à jour les enregistrements selon les filtres chaînés (ou passés en argument).
+
+        Exemples :
+        ```python
+        # Utilisation fluide avec filtre chaîné
+        await client.table("users").eq("id", 42).update({"active": False})
+
+        # Utilisation avec filtres explicites
+        await client.table("users").update({"active": False}, filters={"role": "guest"})
+        ```
+        """
+        combined_filters = dict(self._build_params())
+        if filters:
+            combined_filters.update(filters)
+        return await self._client.update(
+            self._table,
+            data,
+            filters=combined_filters,
+            database=self._database,
+            schema=self._schema,
+            method=method,
+        )
+
+    async def delete(self, filters: Mapping[str, str] | None = None) -> Any:
+        """Supprime les enregistrements selon les filtres chaînés (ou passés en argument).
+
+        Exemples :
+        ```python
+        # Utilisation fluide avec filtre chaîné
+        await client.table("users").eq("id", 42).delete()
+
+        # Utilisation avec filtres explicites
+        await client.table("users").delete(filters={"expired": "true"})
+        ```
+        """
+        combined_filters = dict(self._build_params())
+        if filters:
+            combined_filters.update(filters)
+        return await self._client.delete(
+            self._table,
+            filters=combined_filters,
+            database=self._database,
+            schema=self._schema,
+        )

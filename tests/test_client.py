@@ -117,3 +117,51 @@ async def test_no_default_database_raises_value_error():
     with pytest.raises(ValueError):
         c.table("users")
     await c.close()
+
+
+@pytest.mark.asyncio
+async def test_describe_table_with_datasource(client):
+    with respx.mock(base_url=BASE_URL) as mock:
+        mock.get("/show/other_ds/public/products").mock(
+            return_value=httpx.Response(200, json=[{"column_name": "id"}])
+        )
+        cols = await client.describe_table("products", datasource="other_ds")
+    assert cols == [{"column_name": "id"}]
+    await client.close()
+
+
+def test_sync_client_describe_table():
+    from prestd_client.sync_client import SyncPrestdClient
+
+    sync_c = SyncPrestdClient(BASE_URL, default_database="mydb", default_schema="public")
+    with respx.mock(base_url=BASE_URL) as mock:
+        mock.get("/show/ds1/custom_sch/items").mock(
+            return_value=httpx.Response(200, json=[{"column_name": "sku"}])
+        )
+        cols = sync_c.describe_table("items", datasource="ds1", schema="custom_sch")
+    assert cols == [{"column_name": "sku"}]
+    sync_c.close()
+
+
+def test_sync_client_full_flow():
+    from prestd_client.sync_client import SyncPrestdClient
+
+    with SyncPrestdClient(BASE_URL, default_database="mydb", default_schema="public") as sync_c:
+        with respx.mock(base_url=BASE_URL) as mock:
+            mock.get("/_health").mock(return_value=httpx.Response(200, json={"status": "ok"}))
+            mock.get("/_ready").mock(return_value=httpx.Response(200, json={"status": "ok"}))
+            mock.get("/databases").mock(return_value=httpx.Response(200, json=[{"datname": "mydb"}]))
+            mock.get("/schemas").mock(return_value=httpx.Response(200, json=[{"schema_name": "public"}]))
+            mock.get("/tables").mock(return_value=httpx.Response(200, json=[{"table_name": "users"}]))
+            mock.post("/mydb/public/users").mock(return_value=httpx.Response(201, json=[{"id": 1}, {"id": 2}]))
+            mock.delete("/mydb/public/users", params={"id": "1"}).mock(return_value=httpx.Response(200, json={"deleted": 1}))
+
+            assert sync_c.health() == {"status": "ok"}
+            assert sync_c.ready() == {"status": "ok"}
+            assert sync_c.databases() == [{"datname": "mydb"}]
+            assert sync_c.schemas() == [{"schema_name": "public"}]
+            assert sync_c.tables() == [{"table_name": "users"}]
+            assert sync_c.batch_insert("users", [{"name": "A"}, {"name": "B"}]) == [{"id": 1}, {"id": 2}]
+            assert sync_c.delete("users", {"id": "1"}) == {"deleted": 1}
+
+

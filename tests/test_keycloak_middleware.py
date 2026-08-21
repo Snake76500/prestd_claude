@@ -289,3 +289,70 @@ async def test_table_endpoint_admin_allows_all(app):
             )
             assert response.status_code == 200
             assert response.json() == [{"id": 99}]
+
+
+@pytest.mark.asyncio
+async def test_meta_describe_datasource_table(app):
+    token = generate_token(roles=["admin"])
+    transport = ASGITransport(app=app)
+
+    with respx.mock(base_url="http://prestd-mock:3000") as prest_mock:
+        prest_mock.get("/show/custom_db/public/users").mock(
+            return_value=httpx.Response(
+                200,
+                json=[{"column_name": "id", "data_type": "integer"}, {"column_name": "name", "data_type": "text"}],
+            )
+        )
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get(
+                "/meta/datasource/custom_db/tables/users",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert len(data) == 2
+            assert data[0]["column_name"] == "id"
+
+
+@pytest.mark.asyncio
+async def test_datasource_crud_endpoints(app):
+    token = generate_token(roles=["admin"])
+    transport = ASGITransport(app=app)
+
+    with respx.mock(base_url="http://prestd-mock:3000") as prest_mock:
+        prest_mock.get("/custom_ds/public/orders").mock(
+            return_value=httpx.Response(200, json=[{"id": 1, "item": "Book"}])
+        )
+        prest_mock.post("/custom_ds/public/orders").mock(
+            return_value=httpx.Response(201, json={"id": 2, "item": "Pen"})
+        )
+        prest_mock.patch("/custom_ds/public/orders", params={"id": "2"}).mock(
+            return_value=httpx.Response(200, json={"id": 2, "item": "Pencil"})
+        )
+        prest_mock.delete("/custom_ds/public/orders", params={"id": "2"}).mock(
+            return_value=httpx.Response(200, json={"deleted": 1})
+        )
+
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            headers = {"Authorization": f"Bearer {token}"}
+
+            # GET
+            res_get = await client.get("/datasource/custom_ds/orders", headers=headers)
+            assert res_get.status_code == 200
+            assert res_get.json() == [{"id": 1, "item": "Book"}]
+
+            # POST
+            res_post = await client.post("/datasource/custom_ds/orders", json={"item": "Pen"}, headers=headers)
+            assert res_post.status_code == 201
+            assert res_post.json() == {"id": 2, "item": "Pen"}
+
+            # PATCH
+            res_patch = await client.patch("/datasource/custom_ds/orders?id=2", json={"item": "Pencil"}, headers=headers)
+            assert res_patch.status_code == 200
+            assert res_patch.json() == {"id": 2, "item": "Pencil"}
+
+            # DELETE
+            res_del = await client.delete("/datasource/custom_ds/orders?id=2", headers=headers)
+            assert res_del.status_code == 200
+            assert res_del.json() == {"deleted": 1}
+

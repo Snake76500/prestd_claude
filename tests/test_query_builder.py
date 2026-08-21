@@ -1,3 +1,4 @@
+import pytest
 from prestd_client.query import QueryBuilder
 
 
@@ -55,3 +56,26 @@ def test_fluent_calls_return_same_builder():
     assert qb.eq("a", 1) is qb
     assert qb.select("a") is qb
     assert qb.order("a") is qb
+
+
+@pytest.mark.asyncio
+async def test_query_builder_write_operations():
+    import respx
+    import httpx
+    from prestd_client import PrestdClient
+
+    c = PrestdClient("http://testserver", default_database="mydb", default_schema="public")
+    with respx.mock(base_url="http://testserver") as mock:
+        mock.post("/mydb/public/users").mock(return_value=httpx.Response(201, json={"id": 1}))
+        mock.patch("/mydb/public/users", params={"id": "42"}).mock(return_value=httpx.Response(200, json={"id": 42}))
+        mock.delete("/mydb/public/users", params={"id": "42"}).mock(return_value=httpx.Response(200, json={"deleted": 1}))
+
+        res_insert = await c.table("users").insert({"name": "Alice"})
+        assert res_insert == {"id": 1}
+
+        res_update = await c.table("users").eq("id", 42).update({"active": False})
+        assert res_update == {"id": 42}
+
+        res_delete = await c.table("users").eq("id", 42).delete()
+        assert res_delete == {"deleted": 1}
+    await c.close()

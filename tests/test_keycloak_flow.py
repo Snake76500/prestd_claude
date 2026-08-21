@@ -27,6 +27,7 @@ KEYCLOAK_CLIENT_ID = os.getenv("KEYCLOAK_CLIENT_ID", "prestd-service")
 KEYCLOAK_CLIENT_SECRET = os.getenv("KEYCLOAK_CLIENT_SECRET", None)
 KEYCLOAK_USERNAME = os.getenv("KEYCLOAK_USERNAME", "testuser")
 KEYCLOAK_PASSWORD = os.getenv("KEYCLOAK_PASSWORD", "testpass")
+KEYCLOAK_VERIFY_SSL = os.getenv("KEYCLOAK_VERIFY_SSL", "false").lower() in ("true", "1", "yes")
 
 SERVICE_BASE_URL = os.getenv("SERVICE_BASE_URL", "http://localhost:8000")
 
@@ -38,6 +39,7 @@ async def get_keycloak_token(
     username: str = KEYCLOAK_USERNAME,
     password: str = KEYCLOAK_PASSWORD,
     client_secret: str | None = KEYCLOAK_CLIENT_SECRET,
+    verify_ssl: bool = KEYCLOAK_VERIFY_SSL,
 ) -> str:
     """Récupère un JWT Access Token auprès de Keycloak (OIDC Resource Owner Password Credentials)."""
     token_endpoint = f"{server_url.rstrip('/')}/realms/{realm}/protocol/openid-connect/token"
@@ -51,7 +53,7 @@ async def get_keycloak_token(
     if client_secret:
         payload["client_secret"] = client_secret
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(verify=verify_ssl) as client:
         response = await client.post(
             token_endpoint,
             data=payload,

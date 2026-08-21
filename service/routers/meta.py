@@ -29,3 +29,16 @@ async def list_tables(client: PrestdClient = Depends(get_client)):
 async def describe_table(table: str, client: PrestdClient = Depends(get_client)):
     """Structure de la table (colonnes, types...) via GET /show/{db}/{schema}/{table}."""
     return await client.describe_table(table)
+
+
+@router.get("/datasource/{datasource}/tables/{table}")
+@router.get("/datasources/{datasource}/tables/{table}", include_in_schema=False)
+async def describe_datasource_table(
+    datasource: str,
+    table: str,
+    schema: str | None = None,
+    client: PrestdClient = Depends(get_client),
+):
+    """Structure de la table (colonnes, types...) pour un datasource donné via GET /show/{datasource}/{schema}/{table}."""
+    return await client.describe_table(table, database=datasource, schema=schema)
+
