@@ -1,9 +1,8 @@
 """Proxy CRUD générique : /tables/{table} et /datasource/{datasource}/schema/{schema}/table/{table} -> prestd.
 
-Fonctionne exactement comme l'API native de prestd et le module _studio :
-les paramètres de filtrage (ex: `user=$eq.TOTO`, `age=$gt.18`, `name=$ilike.%foo%`)
-et les paramètres système (`_select`, `_order`, `_page`, `_page_size`, `_or`, etc.)
-sont transmis directement et fidèlement au moteur prestd.
+Fonctionne en miroir de l'API prestd et de prest _studio :
+les filtres peuvent être saisis dans le champ `filter` (Swagger UI)
+ou transmis directement en paramètres d'URL (ex: `user=$eq.TOTO`, `age=$gt.18`).
 """
 from __future__ import annotations
 
@@ -17,10 +16,45 @@ from ..dependencies import get_client, require_api_key
 
 router = APIRouter(tags=["records"], dependencies=[Depends(require_api_key)])
 
+RESERVED_QUERY_PARAMS = {"filter"}
 
-def _forwarded_params(request: Request) -> dict[str, str]:
-    """Transmet l'intégralité des paramètres de la query string tels quels à prestd (miroir prest _studio)."""
-    return dict(request.query_params)
+
+def _extract_filters(
+    request: Request,
+    filter_params: list[str] | str | None = None,
+) -> dict[str, str]:
+    """Extrait et combine tous les filtres :
+    1. Paramètres directs passés dans la query string (ex: ?user=$eq.TOTO&age=$gte.18)
+    2. Saisie explicite dans Swagger via le paramètre `filter` (ex: filter='user=$eq.TOTO')
+    """
+    filters: dict[str, str] = {}
+
+    # 1. Paramètres directs d'URL (ex: ?user=$eq.TOTO&status=active)
+    for k, v in request.query_params.items():
+        if k not in RESERVED_QUERY_PARAMS:
+            filters[k] = v
+
+    # 2. Paramètre(s) filter saisis dans Swagger (ex: filter='user=$eq.TOTO')
+    if filter_params:
+        items = [filter_params] if isinstance(filter_params, str) else filter_params
+        for item in items:
+            item = item.strip()
+            if not item:
+                continue
+            if "=" in item:
+                k, v = item.split("=", 1)
+                filters[k.strip()] = v.strip()
+            elif ":" in item:
+                parts = item.split(":", 2)
+                if len(parts) == 3:
+                    field, op, val = parts
+                    op_clean = op if op.startswith("$") else f"${op}"
+                    filters[field.strip()] = f"{op_clean}.{val.strip()}"
+                elif len(parts) == 2:
+                    field, val = parts
+                    filters[field.strip()] = val.strip()
+
+    return filters
 
 
 PREST_STUDIO_DOC = """
@@ -30,8 +64,8 @@ Cet endpoint fonctionne en miroir direct de l'API prestd et du module **prest `_
 
 ---
 
-### ⚡ Filtres par colonne (Opérateurs prestd / _studio)
-Ajoutez directement vos filtres sous la forme `nom_colonne=$operateur.valeur` ou `nom_colonne=valeur` dans la query string :
+### ⚡ Saisie des filtres (Opérateurs prestd / _studio)
+Vous pouvez saisir vos filtres dans le champ **`filter`** de Swagger ou directement dans l'URL sous la forme `nom_colonne=$operateur.valeur` ou `nom_colonne=valeur` :
 
 | Opérateur | Syntaxe d'exemple | Description SQL équivalente |
 |---|---|---|
@@ -78,6 +112,28 @@ Ajoutez directement vos filtres sous la forme `nom_colonne=$operateur.valeur` ou
 async def list_rows(
     table: str,
     request: Request,
+    filter: list[str] | None = Query(
+        default=None,
+        description="Filtre(s) de colonne (ex: 'user=$eq.TOTO', 'age=$gte.18', 'active=true', 'name=$ilike.%alice%')",
+        openapi_examples={
+            "egalite": {
+                "summary": "Égalité ($eq)",
+                "value": "user=$eq.TOTO",
+            },
+            "comparaison": {
+                "summary": "Comparaison ($gte)",
+                "value": "age=$gte.18",
+            },
+            "recherche_texte": {
+                "summary": "Recherche textuelle ($ilike)",
+                "value": "name=$ilike.%TOTO%",
+            },
+            "liste_in": {
+                "summary": "Appartenance ($in)",
+                "value": "role=$in.admin,editor",
+            },
+        },
+    ),
     _select: str | None = Query(default=None, description="Colonnes à sélectionner (ex: 'id,name,email')"),
     _order: str | None = Query(default=None, description="Tri, préfixer par '-' pour DESC (ex: '-created_at,name')"),
     _page: int | None = Query(default=None, description="Numéro de page (1-indexé)", ge=1),
@@ -90,7 +146,8 @@ async def list_rows(
 ):
     """Liste/filtre des lignes de la table (base par défaut)."""
     qb = client.table(table)
-    for field, value in _forwarded_params(request).items():
+    filters = _extract_filters(request, filter_params=filter)
+    for field, value in filters.items():
         qb.filter(field, value)
     return await qb.execute()
 
@@ -105,22 +162,42 @@ async def create_row(
     return await client.insert(table, payload)
 
 
-@router.patch("/tables/{table}")
+@router.patch(
+    "/tables/{table}",
+    summary="Mettre à jour des enregistrements filtrés (base par défaut)",
+    description="Met à jour les lignes correspondant aux filtres spécifiés dans `filter` ou dans l'URL (ex: `?user=$eq.TOTO` ou `?id=42`).",
+)
 async def update_rows(
     table: str,
     payload: dict[str, Any],
     request: Request,
+    filter: list[str] | None = Query(
+        default=None,
+        description="Filtre(s) de mise à jour (ex: 'user=$eq.TOTO', 'id=42', 'role=guest')",
+    ),
     client: PrestdClient = Depends(get_client),
 ):
-    """Mise à jour dans la table (base par défaut). Les filtres viennent de la query string (ex: `?id=42` ou `?user=$eq.TOTO`). Au moins un filtre est requis."""
-    filters = _forwarded_params(request)
+    """Mise à jour dans la table (base par défaut). Au moins un filtre est requis."""
+    filters = _extract_filters(request, filter_params=filter)
     return await client.update(table, payload, filters)
 
 
-@router.delete("/tables/{table}")
-async def delete_rows(table: str, request: Request, client: PrestdClient = Depends(get_client)):
-    """Suppression filtrée par la query string dans la table (base par défaut, ex: `?id=42` ou `?user=$eq.TOTO`). Au moins un filtre est requis."""
-    filters = _forwarded_params(request)
+@router.delete(
+    "/tables/{table}",
+    summary="Supprimer des enregistrements filtrés (base par défaut)",
+    description="Supprime les lignes correspondant aux filtres spécifiés dans `filter` ou dans l'URL (ex: `?user=$eq.TOTO` ou `?id=42`).",
+)
+async def delete_rows(
+    table: str,
+    request: Request,
+    filter: list[str] | None = Query(
+        default=None,
+        description="Filtre(s) de suppression (ex: 'user=$eq.TOTO', 'id=42', 'status=expired')",
+    ),
+    client: PrestdClient = Depends(get_client),
+):
+    """Suppression filtrée dans la table (base par défaut). Au moins un filtre est requis."""
+    filters = _extract_filters(request, filter_params=filter)
     return await client.delete(table, filters)
 
 
@@ -141,6 +218,28 @@ async def list_datasource_schema_rows(
     schema: str,
     table: str,
     request: Request,
+    filter: list[str] | None = Query(
+        default=None,
+        description="Filtre(s) de colonne (ex: 'user=$eq.TOTO', 'age=$gte.18', 'active=true', 'name=$ilike.%alice%')",
+        openapi_examples={
+            "egalite": {
+                "summary": "Égalité ($eq)",
+                "value": "user=$eq.TOTO",
+            },
+            "comparaison": {
+                "summary": "Comparaison ($gte)",
+                "value": "age=$gte.18",
+            },
+            "recherche_texte": {
+                "summary": "Recherche textuelle ($ilike)",
+                "value": "name=$ilike.%TOTO%",
+            },
+            "liste_in": {
+                "summary": "Appartenance ($in)",
+                "value": "role=$in.admin,editor",
+            },
+        },
+    ),
     _select: str | None = Query(default=None, description="Colonnes à sélectionner (ex: 'id,name,email')"),
     _order: str | None = Query(default=None, description="Tri, préfixer par '-' pour DESC (ex: '-created_at,name')"),
     _page: int | None = Query(default=None, description="Numéro de page (1-indexé)", ge=1),
@@ -153,7 +252,8 @@ async def list_datasource_schema_rows(
 ):
     """Liste/filtre des lignes pour un datasource et un schéma spécifiques."""
     qb = client.table(table, datasource=datasource, schema=schema)
-    for field, value in _forwarded_params(request).items():
+    filters = _extract_filters(request, filter_params=filter)
+    for field, value in filters.items():
         qb.filter(field, value)
     return await qb.execute()
 
@@ -172,7 +272,11 @@ async def create_datasource_schema_row(
     return await client.insert(table, payload, datasource=datasource, schema=schema)
 
 
-@router.patch("/datasource/{datasource}/schema/{schema}/table/{table}")
+@router.patch(
+    "/datasource/{datasource}/schema/{schema}/table/{table}",
+    summary="Mettre à jour des enregistrements filtrés (datasource & schéma explicites)",
+    description="Met à jour les lignes correspondant aux filtres spécifiés dans `filter` ou dans l'URL (ex: `?user=$eq.TOTO` ou `?id=42`).",
+)
 @router.patch("/datasource/{datasource}/schema/{schema}/tables/{table}", include_in_schema=False)
 @router.patch("/datasources/{datasource}/schemas/{schema}/tables/{table}", include_in_schema=False)
 async def update_datasource_schema_rows(
@@ -181,14 +285,22 @@ async def update_datasource_schema_rows(
     table: str,
     payload: dict[str, Any],
     request: Request,
+    filter: list[str] | None = Query(
+        default=None,
+        description="Filtre(s) de mise à jour (ex: 'user=$eq.TOTO', 'id=42', 'status=pending')",
+    ),
     client: PrestdClient = Depends(get_client),
 ):
-    """Mise à jour filtrée dans une table pour un datasource et schéma spécifiques (ex: `?user=$eq.TOTO`). Au moins un filtre est requis."""
-    filters = _forwarded_params(request)
+    """Mise à jour filtrée dans une table pour un datasource et schéma spécifiques. Au moins un filtre est requis."""
+    filters = _extract_filters(request, filter_params=filter)
     return await client.update(table, payload, filters, datasource=datasource, schema=schema)
 
 
-@router.delete("/datasource/{datasource}/schema/{schema}/table/{table}")
+@router.delete(
+    "/datasource/{datasource}/schema/{schema}/table/{table}",
+    summary="Supprimer des enregistrements filtrés (datasource & schéma explicites)",
+    description="Supprime les lignes correspondant aux filtres spécifiés dans `filter` ou dans l'URL (ex: `?user=$eq.TOTO` ou `?id=42`).",
+)
 @router.delete("/datasource/{datasource}/schema/{schema}/tables/{table}", include_in_schema=False)
 @router.delete("/datasources/{datasource}/schemas/{schema}/tables/{table}", include_in_schema=False)
 async def delete_datasource_schema_rows(
@@ -196,10 +308,14 @@ async def delete_datasource_schema_rows(
     schema: str,
     table: str,
     request: Request,
+    filter: list[str] | None = Query(
+        default=None,
+        description="Filtre(s) de suppression (ex: 'user=$eq.TOTO', 'id=42', 'status=expired')",
+    ),
     client: PrestdClient = Depends(get_client),
 ):
-    """Suppression filtrée par la query string pour un datasource et schéma spécifiques (ex: `?user=$eq.TOTO`). Au moins un filtre est requis."""
-    filters = _forwarded_params(request)
+    """Suppression filtrée par la query string pour un datasource et schéma spécifiques. Au moins un filtre est requis."""
+    filters = _extract_filters(request, filter_params=filter)
     return await client.delete(table, filters, datasource=datasource, schema=schema)
 
 
@@ -216,10 +332,12 @@ async def list_datasource_rows(
     datasource: str,
     table: str,
     request: Request,
+    filter: list[str] | None = Query(default=None),
     client: PrestdClient = Depends(get_client),
 ):
     qb = client.table(table, datasource=datasource)
-    for field, value in _forwarded_params(request).items():
+    filters = _extract_filters(request, filter_params=filter)
+    for field, value in filters.items():
         qb.filter(field, value)
     return await qb.execute()
 
@@ -246,9 +364,10 @@ async def update_datasource_rows(
     table: str,
     payload: dict[str, Any],
     request: Request,
+    filter: list[str] | None = Query(default=None),
     client: PrestdClient = Depends(get_client),
 ):
-    filters = _forwarded_params(request)
+    filters = _extract_filters(request, filter_params=filter)
     return await client.update(table, payload, filters, datasource=datasource)
 
 
@@ -260,7 +379,8 @@ async def delete_datasource_rows(
     datasource: str,
     table: str,
     request: Request,
+    filter: list[str] | None = Query(default=None),
     client: PrestdClient = Depends(get_client),
 ):
-    filters = _forwarded_params(request)
+    filters = _extract_filters(request, filter_params=filter)
     return await client.delete(table, filters, datasource=datasource)

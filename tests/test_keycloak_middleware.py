@@ -381,3 +381,58 @@ async def test_direct_query_parameters_with_operators(app):
             assert res.status_code == 200
             assert res.json() == [{"id": 1, "user": "TOTO"}]
 
+
+@pytest.mark.asyncio
+async def test_swagger_filter_parameter(app):
+    token = generate_token(roles=["admin"])
+    transport = ASGITransport(app=app)
+
+    with respx.mock(base_url="http://prestd-mock:3000") as prest_mock:
+        # GET
+        prest_mock.get(
+            "/custom_ds/analytics/users",
+            params={"user": "$eq.TOTO", "age": "$gte.18"},
+        ).mock(return_value=httpx.Response(200, json=[{"id": 1, "user": "TOTO"}]))
+
+        # PATCH
+        prest_mock.patch(
+            "/custom_ds/analytics/users",
+            params={"user": "$eq.TOTO"},
+        ).mock(return_value=httpx.Response(200, json={"id": 1, "status": "updated"}))
+
+        # DELETE
+        prest_mock.delete(
+            "/custom_ds/analytics/users",
+            params={"user": "$eq.TOTO"},
+        ).mock(return_value=httpx.Response(200, json={"deleted": 1}))
+
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            headers = {"Authorization": f"Bearer {token}"}
+
+            # GET avec paramètre filter Swagger
+            res_get = await client.get(
+                "/datasource/custom_ds/schema/analytics/table/users"
+                "?filter=user=$eq.TOTO"
+                "&filter=age=$gte.18",
+                headers=headers,
+            )
+            assert res_get.status_code == 200
+            assert res_get.json() == [{"id": 1, "user": "TOTO"}]
+
+            # PATCH avec paramètre filter Swagger
+            res_patch = await client.patch(
+                "/datasource/custom_ds/schema/analytics/table/users?filter=user=$eq.TOTO",
+                json={"status": "updated"},
+                headers=headers,
+            )
+            assert res_patch.status_code == 200
+            assert res_patch.json() == {"id": 1, "status": "updated"}
+
+            # DELETE avec paramètre filter Swagger
+            res_del = await client.delete(
+                "/datasource/custom_ds/schema/analytics/table/users?filter=user=$eq.TOTO",
+                headers=headers,
+            )
+            assert res_del.status_code == 200
+            assert res_del.json() == {"deleted": 1}
+
