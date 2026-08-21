@@ -116,6 +116,9 @@ class QueryBuilder:
     # -- exécution -----------------------------------------------------
     def _build_params(self) -> dict[str, str]:
         params = dict(self._params)
+        # prestd exige _page pour activer la pagination quand _page_size est fourni
+        if "_page_size" in params and "_page" not in params:
+            params["_page"] = "1"
         if self._or_conditions:
             params["_or"] = "||".join(self._or_conditions)
         return params
@@ -128,9 +131,22 @@ class QueryBuilder:
         users = await client.table("users").eq("active", True).execute()
         ```
         """
-        return await self._client._get_rows(
-            self._database, self._schema, self._table, self._build_params()
+        params = self._build_params()
+        rows = await self._client._get_rows(
+            self._database, self._schema, self._table, params
         )
+        # Si prestd n'a pas appliqué la pagination et renvoie plus de résultats que _page_size
+        if "_page_size" in params:
+            try:
+                page_size = int(params["_page_size"])
+                page = int(params.get("_page", "1"))
+                if page_size > 0 and len(rows) > page_size:
+                    start = max(0, (page - 1) * page_size)
+                    end = start + page_size
+                    return rows[start:end]
+            except (ValueError, TypeError):
+                pass
+        return rows
 
     async def first(self) -> dict[str, Any] | None:
         """Exécute la requête avec LIMIT 1 (page 1, taille 1) et renvoie le premier élément ou None.

@@ -79,3 +79,34 @@ async def test_query_builder_write_operations():
         res_delete = await c.table("users").eq("id", 42).delete()
         assert res_delete == {"deleted": 1}
     await c.close()
+
+
+@pytest.mark.asyncio
+async def test_query_builder_pagination_slicing():
+    import respx
+    import httpx
+    from prestd_client import PrestdClient
+
+    c = PrestdClient("http://testserver", default_database="mydb", default_schema="public")
+    all_data = [{"id": i, "name": f"User{i}"} for i in range(1, 11)]
+
+    with respx.mock(base_url="http://testserver") as mock:
+        # Simule un prestd qui renvoie toutes les lignes sans paginer
+        mock.get("/mydb/public/users", params={"_page": "2", "_page_size": "3"}).mock(
+            return_value=httpx.Response(200, json=all_data)
+        )
+        mock.get("/mydb/public/users", params={"_page": "1", "_page_size": "3"}).mock(
+            return_value=httpx.Response(200, json=all_data)
+        )
+
+        # Page 2 de taille 3 -> User4, User5, User6
+        page2 = await c.table("users").page(2, page_size=3).execute()
+        assert len(page2) == 3
+        assert [u["id"] for u in page2] == [4, 5, 6]
+
+        # Page 1 de taille 3 -> User1, User2, User3
+        page1 = await c.table("users").page(1, page_size=3).execute()
+        assert len(page1) == 3
+        assert [u["id"] for u in page1] == [1, 2, 3]
+
+    await c.close()

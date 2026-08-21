@@ -446,3 +446,41 @@ async def test_docs_page(app):
         assert "requestInterceptor" in res.text
         assert "SwaggerUIBundle" in res.text
 
+
+@pytest.mark.asyncio
+async def test_pagination_parameters(app):
+    token = generate_token(roles=["admin"])
+    transport = ASGITransport(app=app)
+
+    with respx.mock(base_url="http://prestd-mock:3000") as prest_mock:
+        # 1. _page=2 et _page_size=5
+        prest_mock.get(
+            "/custom_ds/analytics/users",
+            params={"_page": "2", "_page_size": "5"},
+        ).mock(return_value=httpx.Response(200, json=[{"id": 6, "name": "User6"}]))
+
+        # 2. _page_size=5 seul -> doit automatiquement injecter _page=1
+        prest_mock.get(
+            "/custom_ds/analytics/users",
+            params={"_page": "1", "_page_size": "5"},
+        ).mock(return_value=httpx.Response(200, json=[{"id": 1, "name": "User1"}]))
+
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            headers = {"Authorization": f"Bearer {token}"}
+
+            # Test avec _page et _page_size explicites
+            res1 = await client.get(
+                "/datasource/custom_ds/schema/analytics/table/users?_page=2&_page_size=5",
+                headers=headers,
+            )
+            assert res1.status_code == 200
+            assert res1.json() == [{"id": 6, "name": "User6"}]
+
+            # Test avec _page_size seul (Swagger default)
+            res2 = await client.get(
+                "/datasource/custom_ds/schema/analytics/table/users?_page_size=5",
+                headers=headers,
+            )
+            assert res2.status_code == 200
+            assert res2.json() == [{"id": 1, "name": "User1"}]
+

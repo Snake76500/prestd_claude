@@ -52,7 +52,17 @@ def _extract_filters(
                     filters[field.strip()] = f"{op_clean}.{val.strip()}"
                 elif len(parts) == 2:
                     field, val = parts
-                    filters[field.strip()] = val.strip()
+    # 3. Normalisation des alias de pagination
+    if "page" in filters and "_page" not in filters:
+        filters["_page"] = filters.pop("page")
+    if "page_size" in filters and "_page_size" not in filters:
+        filters["_page_size"] = filters.pop("page_size")
+    if "limit" in filters and "_page_size" not in filters:
+        filters["_page_size"] = filters.pop("limit")
+
+    # prestd exige _page pour activer la pagination quand _page_size est fourni
+    if "_page_size" in filters and "_page" not in filters:
+        filters["_page"] = "1"
 
     return filters
 
