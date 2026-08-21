@@ -219,7 +219,8 @@ async def test_table_endpoint_read_permission_allows_get(app):
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             response = await client.get("/tables/users", headers={"Authorization": f"Bearer {token}"})
             assert response.status_code == 200
-            assert response.json() == [{"id": 1, "name": "Alice"}]
+            assert response.json()["data"] == [{"id": 1, "name": "Alice"}]
+            assert response.json()["total_rows"] == 1
 
 
 @pytest.mark.asyncio
@@ -288,7 +289,7 @@ async def test_table_endpoint_admin_allows_all(app):
                 headers={"Authorization": f"Bearer {token}"},
             )
             assert response.status_code == 200
-            assert response.json() == [{"id": 99}]
+            assert response.json()["data"] == [{"id": 99}]
 
 
 @pytest.mark.asyncio
@@ -339,7 +340,7 @@ async def test_datasource_crud_endpoints(app):
             # GET /datasource/{datasource}/schema/{schema}/table/{table}
             res_get = await client.get("/datasource/custom_ds/schema/analytics/table/orders", headers=headers)
             assert res_get.status_code == 200
-            assert res_get.json() == [{"id": 1, "item": "Book"}]
+            assert res_get.json()["data"] == [{"id": 1, "item": "Book"}]
 
             # POST /datasource/{datasource}/schema/{schema}/table/{table}
             res_post = await client.post("/datasource/custom_ds/schema/analytics/table/orders", json={"item": "Pen"}, headers=headers)
@@ -379,7 +380,7 @@ async def test_direct_query_parameters_with_operators(app):
                 headers=headers,
             )
             assert res.status_code == 200
-            assert res.json() == [{"id": 1, "user": "TOTO"}]
+            assert res.json()["data"] == [{"id": 1, "user": "TOTO"}]
 
 
 @pytest.mark.asyncio
@@ -417,7 +418,7 @@ async def test_swagger_filter_parameter(app):
                 headers=headers,
             )
             assert res_get.status_code == 200
-            assert res_get.json() == [{"id": 1, "user": "TOTO"}]
+            assert res_get.json()["data"] == [{"id": 1, "user": "TOTO"}]
 
             # PATCH avec paramètre filter Swagger
             res_patch = await client.patch(
@@ -453,11 +454,15 @@ async def test_pagination_parameters(app):
     transport = ASGITransport(app=app)
 
     with respx.mock(base_url="http://prestd-mock:3000") as prest_mock:
-        # 1. _page=2 et _page_size=5
+        # 1. _page=2 et _page_size=5 -> mock pour data et mock pour count
         prest_mock.get(
             "/custom_ds/analytics/users",
             params={"_page": "2", "_page_size": "5"},
         ).mock(return_value=httpx.Response(200, json=[{"id": 6, "name": "User6"}]))
+        prest_mock.get(
+            "/custom_ds/analytics/users",
+            params={"_count": "*"},
+        ).mock(return_value=httpx.Response(200, json=[{"count": 25}]))
 
         # 2. _page_size=5 seul -> doit automatiquement injecter _page=1
         prest_mock.get(
@@ -474,7 +479,12 @@ async def test_pagination_parameters(app):
                 headers=headers,
             )
             assert res1.status_code == 200
-            assert res1.json() == [{"id": 6, "name": "User6"}]
+            data1 = res1.json()
+            assert data1["data"] == [{"id": 6, "name": "User6"}]
+            assert data1["page"] == 2
+            assert data1["page_size"] == 5
+            assert data1["total_rows"] == 25
+            assert data1["total_pages"] == 5
 
             # Test avec _page_size seul (Swagger default)
             res2 = await client.get(
@@ -482,5 +492,7 @@ async def test_pagination_parameters(app):
                 headers=headers,
             )
             assert res2.status_code == 200
-            assert res2.json() == [{"id": 1, "name": "User1"}]
+            data2 = res2.json()
+            assert data2["data"] == [{"id": 1, "name": "User1"}]
+            assert data2["page"] == 1
 

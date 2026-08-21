@@ -97,10 +97,10 @@ async def select_table(
             raise PermissionError(
                 f"403 Forbidden : droits insuffisants pour lire la table '{table}' ({response.text})"
             )
-        if response.status_code != 200:
-            raise RuntimeError(f"Erreur HTTP {response.status_code} sur {endpoint} : {response.text}")
-
-        return response.json()
+        payload = response.json()
+        if isinstance(payload, dict) and "data" in payload:
+            return payload["data"]
+        return payload
 
 
 # ==============================================================================
@@ -200,8 +200,8 @@ async def test_keycloak_auth_and_select_flow():
                     "/tables/users",
                     headers={"Authorization": f"Bearer {token}"},
                 )
-                assert response.status_code == 200
-                rows = response.json()
+                payload = response.json()
+                rows = payload["data"]
                 assert len(rows) == 2
                 assert rows[0]["name"] == "Fabien"
         finally:

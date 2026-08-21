@@ -1,11 +1,4 @@
-"""Proxy CRUD générique : /tables/{table} et /datasource/{datasource}/schema/{schema}/table/{table} -> prestd.
-
-Fonctionne en miroir de l'API prestd et de prest _studio :
-les filtres peuvent être saisis dans le champ `filter` (Swagger UI)
-ou transmis directement en paramètres d'URL (ex: `user=$eq.TOTO`, `age=$gt.18`).
-"""
-from __future__ import annotations
-
+import math
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -96,10 +89,95 @@ def _extract_filters(
     return filters
 
 
+async def _get_total_count(
+    client: PrestdClient,
+    table: str,
+    filters: dict[str, str],
+    datasource: str | None = None,
+    schema: str | None = None,
+) -> int:
+    """Exécute une requête COUNT(*) sur prestd avec les filtres applicables."""
+    count_qb = client.table(table, datasource=datasource, schema=schema)
+    for field, value in filters.items():
+        if not field.startswith("_"):
+            count_qb.filter(field, value)
+    count_qb.count("*")
+    try:
+        res = await count_qb.execute()
+        if res and isinstance(res, list) and len(res) > 0 and isinstance(res[0], dict):
+            val = list(res[0].values())[0]
+            return int(val)
+    except Exception:
+        pass
+    return 0
+
+
+async def _execute_paginated_get(
+    qb: Any,
+    client: PrestdClient,
+    table: str,
+    filters: dict[str, str],
+    datasource: str | None = None,
+    schema: str | None = None,
+) -> dict[str, Any] | list[dict[str, Any]]:
+    """Exécute la requête GET et renvoie la réponse encapsulée avec métadonnées de pagination."""
+    if "_count" in filters:
+        return await qb.execute()
+
+    rows = await qb.execute()
+
+    try:
+        page = int(filters.get("_page", "1"))
+    except ValueError:
+        page = 1
+
+    has_page_size = "_page_size" in filters
+    if has_page_size:
+        try:
+            page_size = int(filters["_page_size"])
+        except ValueError:
+            page_size = len(rows) if len(rows) > 0 else 10
+    else:
+        page_size = len(rows) if len(rows) > 0 else 10
+
+    # Optimisation : si page 1 et moins de résultats que page_size, total_rows est directement connu
+    if page == 1 and len(rows) < page_size:
+        total_rows = len(rows)
+    else:
+        total_rows = await _get_total_count(client, table, filters, datasource=datasource, schema=schema)
+        if total_rows < len(rows):
+            total_rows = len(rows)
+
+    if total_rows == 0:
+        total_pages = 0
+    elif page_size > 0:
+        total_pages = math.ceil(total_rows / page_size)
+    else:
+        total_pages = 1
+
+    return {
+        "data": rows,
+        "page": page,
+        "page_size": page_size,
+        "total_rows": total_rows,
+        "total_pages": total_pages,
+    }
+
+
 PREST_STUDIO_DOC = """
 Recherche, filtre et pagine les enregistrements d'une table PostgreSQL via prestd.
 
 Cet endpoint fonctionne en miroir direct de l'API prestd et du module **prest `_studio`**.
+
+---
+
+### 📦 Format de la réponse GET
+La réponse est encapsulée dans une structure de pagination enrichie :
+* `data` : Liste des enregistrements de la page demandée
+* `page` : Numéro de la page actuelle (1-indexé)
+* `page_size` : Nombre d'éléments par page
+* `total_rows` : Nombre total d'enregistrements (rows) correspondant aux filtres
+* `total_pages` : Nombre total de pages disponibles
 
 ---
 
@@ -199,7 +277,7 @@ async def list_rows(
     )
     for field, value in filters.items():
         qb.filter(field, value)
-    return await qb.execute()
+    return await _execute_paginated_get(qb, client, table, filters)
 
 
 @router.post("/tables/{table}", status_code=201)
@@ -316,7 +394,30 @@ async def list_datasource_schema_rows(
     )
     for field, value in filters.items():
         qb.filter(field, value)
-    return await qb.execute()
+    return await _execute_paginated_get(qb, client, table, filters, datasource=datasource, schema=schema)
+
+
+# ==============================================================================
+# Alias de compatibilité (/datasource/{datasource}/{table})
+# ==============================================================================
+
+
+@router.get("/datasource/{datasource}/{table}", include_in_schema=False)
+@router.get("/datasource/{datasource}/tables/{table}", include_in_schema=False)
+@router.get("/datasources/{datasource}/{table}", include_in_schema=False)
+@router.get("/datasources/{datasource}/tables/{table}", include_in_schema=False)
+async def list_datasource_rows(
+    datasource: str,
+    table: str,
+    request: Request,
+    filter: list[str] | None = Query(default=None),
+    client: PrestdClient = Depends(get_client),
+):
+    qb = client.table(table, datasource=datasource)
+    filters = _extract_filters(request, filter_params=filter)
+    for field, value in filters.items():
+        qb.filter(field, value)
+    return await _execute_paginated_get(qb, client, table, filters, datasource=datasource)
 
 
 @router.post("/datasource/{datasource}/schema/{schema}/table/{table}", status_code=201)
