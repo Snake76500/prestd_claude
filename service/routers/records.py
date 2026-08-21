@@ -215,6 +215,42 @@ Vous pouvez saisir vos filtres dans le champ **`filter`** de Swagger ou directem
 * `_or` : Combinaison OU logique (ex: `_or=name=$ilike.%TOTO%||email=$ilike.%TOTO%`)
 """
 
+PREST_UPDATE_DOC = """
+Mise à jour d'un ou plusieurs enregistrements filtrés d'une table PostgreSQL via prestd.
+
+---
+
+### ⚠️ Condition obligatoire
+Au moins un filtre est requis dans le paramètre **`filter`** ou directement dans l'URL pour identifier les lignes à modifier.
+
+---
+
+### ⚡ Exemples de filtres de sélection
+Vous pouvez saisir vos filtres dans le champ **`filter`** de Swagger UI ou directement dans l'URL (ex: `id=42` ou `status=$eq.pending`) :
+
+* `id=42` : Met à jour la ligne ayant l'ID 42 (`WHERE "id" = 42`)
+* `user=$eq.TOTO` : Met à jour les lignes de l'utilisateur TOTO (`WHERE "user" = 'TOTO'`)
+* `status=$in.pending,draft` : Met à jour les lignes dont le statut est pending ou draft (`WHERE "status" IN ('pending', 'draft')`)
+"""
+
+PREST_DELETE_DOC = """
+Suppression d'un ou plusieurs enregistrements filtrés d'une table PostgreSQL via prestd.
+
+---
+
+### ⚠️ Condition obligatoire
+Au moins un filtre est requis dans le paramètre **`filter`** ou directement dans l'URL pour éviter toute suppression inconditionnelle.
+
+---
+
+### ⚡ Exemples de filtres de sélection
+Vous pouvez saisir vos filtres dans le champ **`filter`** de Swagger UI ou directement dans l'URL (ex: `id=42` ou `status=$eq.expired`) :
+
+* `id=42` : Supprime la ligne ayant l'ID 42 (`WHERE "id" = 42`)
+* `user=$eq.TOTO` : Supprime les lignes de l'utilisateur TOTO (`WHERE "user" = 'TOTO'`)
+* `expired_at=$lt.2026-01-01` : Supprime les lignes expirées avant la date (`WHERE "expired_at" < '2026-01-01'`)
+"""
+
 
 # ==============================================================================
 # Routes sur la base par défaut (/tables/{table})
@@ -293,7 +329,7 @@ async def create_row(
 @router.patch(
     "/tables/{table}",
     summary="Mettre à jour des enregistrements filtrés (base par défaut)",
-    description="Met à jour les lignes correspondant aux filtres spécifiés dans `filter` ou dans l'URL (ex: `?user=$eq.TOTO` ou `?id=42`).",
+    description=PREST_UPDATE_DOC,
 )
 async def update_rows(
     table: str,
@@ -301,7 +337,25 @@ async def update_rows(
     request: Request,
     filter: list[str] | None = Query(
         default=None,
-        description="Filtre(s) de mise à jour (ex: 'user=$eq.TOTO', 'id=42', 'role=guest')",
+        description="Filtre(s) de ciblage des enregistrements à mettre à jour (ex: 'id=42', 'user=$eq.TOTO', 'status=pending')",
+        openapi_examples={
+            "par_id": {
+                "summary": "Filtre par ID",
+                "value": "id=42",
+            },
+            "egalite": {
+                "summary": "Égalité ($eq)",
+                "value": "user=$eq.TOTO",
+            },
+            "comparaison": {
+                "summary": "Comparaison ($gte)",
+                "value": "age=$gte.18",
+            },
+            "liste_in": {
+                "summary": "Appartenance ($in)",
+                "value": "status=$in.pending,draft",
+            },
+        },
     ),
     client: PrestdClient = Depends(get_client),
 ):
@@ -313,14 +367,32 @@ async def update_rows(
 @router.delete(
     "/tables/{table}",
     summary="Supprimer des enregistrements filtrés (base par défaut)",
-    description="Supprime les lignes correspondant aux filtres spécifiés dans `filter` ou dans l'URL (ex: `?user=$eq.TOTO` ou `?id=42`).",
+    description=PREST_DELETE_DOC,
 )
 async def delete_rows(
     table: str,
     request: Request,
     filter: list[str] | None = Query(
         default=None,
-        description="Filtre(s) de suppression (ex: 'user=$eq.TOTO', 'id=42', 'status=expired')",
+        description="Filtre(s) de ciblage des enregistrements à supprimer (ex: 'id=42', 'user=$eq.TOTO', 'status=expired')",
+        openapi_examples={
+            "par_id": {
+                "summary": "Filtre par ID",
+                "value": "id=42",
+            },
+            "egalite": {
+                "summary": "Égalité ($eq)",
+                "value": "user=$eq.TOTO",
+            },
+            "comparaison": {
+                "summary": "Comparaison ($lt)",
+                "value": "expired_at=$lt.2026-01-01",
+            },
+            "liste_in": {
+                "summary": "Appartenance ($in)",
+                "value": "status=$in.expired,archived",
+            },
+        },
     ),
     client: PrestdClient = Depends(get_client),
 ):
@@ -437,7 +509,7 @@ async def create_datasource_schema_row(
 @router.patch(
     "/datasource/{datasource}/schema/{schema}/table/{table}",
     summary="Mettre à jour des enregistrements filtrés (datasource & schéma explicites)",
-    description="Met à jour les lignes correspondant aux filtres spécifiés dans `filter` ou dans l'URL (ex: `?user=$eq.TOTO` ou `?id=42`).",
+    description=PREST_UPDATE_DOC,
 )
 @router.patch("/datasource/{datasource}/schema/{schema}/tables/{table}", include_in_schema=False)
 @router.patch("/datasources/{datasource}/schemas/{schema}/tables/{table}", include_in_schema=False)
@@ -449,7 +521,25 @@ async def update_datasource_schema_rows(
     request: Request,
     filter: list[str] | None = Query(
         default=None,
-        description="Filtre(s) de mise à jour (ex: 'user=$eq.TOTO', 'id=42', 'status=pending')",
+        description="Filtre(s) de ciblage des enregistrements à mettre à jour (ex: 'id=42', 'user=$eq.TOTO', 'status=pending')",
+        openapi_examples={
+            "par_id": {
+                "summary": "Filtre par ID",
+                "value": "id=42",
+            },
+            "egalite": {
+                "summary": "Égalité ($eq)",
+                "value": "user=$eq.TOTO",
+            },
+            "comparaison": {
+                "summary": "Comparaison ($gte)",
+                "value": "age=$gte.18",
+            },
+            "liste_in": {
+                "summary": "Appartenance ($in)",
+                "value": "status=$in.pending,draft",
+            },
+        },
     ),
     client: PrestdClient = Depends(get_client),
 ):
@@ -461,7 +551,7 @@ async def update_datasource_schema_rows(
 @router.delete(
     "/datasource/{datasource}/schema/{schema}/table/{table}",
     summary="Supprimer des enregistrements filtrés (datasource & schéma explicites)",
-    description="Supprime les lignes correspondant aux filtres spécifiés dans `filter` ou dans l'URL (ex: `?user=$eq.TOTO` ou `?id=42`).",
+    description=PREST_DELETE_DOC,
 )
 @router.delete("/datasource/{datasource}/schema/{schema}/tables/{table}", include_in_schema=False)
 @router.delete("/datasources/{datasource}/schemas/{schema}/tables/{table}", include_in_schema=False)
@@ -472,7 +562,25 @@ async def delete_datasource_schema_rows(
     request: Request,
     filter: list[str] | None = Query(
         default=None,
-        description="Filtre(s) de suppression (ex: 'user=$eq.TOTO', 'id=42', 'status=expired')",
+        description="Filtre(s) de ciblage des enregistrements à supprimer (ex: 'id=42', 'user=$eq.TOTO', 'status=expired')",
+        openapi_examples={
+            "par_id": {
+                "summary": "Filtre par ID",
+                "value": "id=42",
+            },
+            "egalite": {
+                "summary": "Égalité ($eq)",
+                "value": "user=$eq.TOTO",
+            },
+            "comparaison": {
+                "summary": "Comparaison ($lt)",
+                "value": "expired_at=$lt.2026-01-01",
+            },
+            "liste_in": {
+                "summary": "Appartenance ($in)",
+                "value": "status=$in.expired,archived",
+            },
+        },
     ),
     client: PrestdClient = Depends(get_client),
 ):
