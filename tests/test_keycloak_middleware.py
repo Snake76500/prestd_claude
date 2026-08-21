@@ -356,3 +356,27 @@ async def test_datasource_crud_endpoints(app):
             assert res_del.status_code == 200
             assert res_del.json() == {"deleted": 1}
 
+
+@pytest.mark.asyncio
+async def test_search_parameter_with_operators(app):
+    token = generate_token(roles=["admin"])
+    transport = ASGITransport(app=app)
+
+    with respx.mock(base_url="http://prestd-mock:3000") as prest_mock:
+        prest_mock.get(
+            "/custom_ds/analytics/users",
+            params={"name": "$ilike.%alice%", "age": "$gte.18", "role": "$in.admin,editor"},
+        ).mock(return_value=httpx.Response(200, json=[{"id": 1, "name": "Alice"}]))
+
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            headers = {"Authorization": f"Bearer {token}"}
+            res = await client.get(
+                "/datasource/custom_ds/schema/analytics/table/users"
+                "?search=name=$ilike.%alice%"
+                "&search=age:gte:18"
+                "&search=role=$in.admin,editor",
+                headers=headers,
+            )
+            assert res.status_code == 200
+            assert res.json() == [{"id": 1, "name": "Alice"}]
+
