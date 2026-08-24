@@ -5,9 +5,12 @@ from fastapi import APIRouter, Body, Depends, Query, Request
 
 from prestd_client import PrestdClient
 
-from ..dependencies import get_client, require_api_key
+from ..dependencies import bearer_scheme, get_client, require_api_key
 
-router = APIRouter(tags=["records"], dependencies=[Depends(require_api_key)])
+router = APIRouter(
+    tags=["records"],
+    dependencies=[Depends(require_api_key), Depends(bearer_scheme)],
+)
 
 RESERVED_QUERY_PARAMS = {"filter"}
 

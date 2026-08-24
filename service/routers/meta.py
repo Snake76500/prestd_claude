@@ -5,9 +5,13 @@ from fastapi import APIRouter, Depends
 
 from prestd_client import PrestdClient
 
-from ..dependencies import get_client, require_api_key
+from ..dependencies import bearer_scheme, get_client, require_api_key
 
-router = APIRouter(prefix="/meta", tags=["metadata"], dependencies=[Depends(require_api_key)])
+router = APIRouter(
+    prefix="/meta",
+    tags=["metadata"],
+    dependencies=[Depends(require_api_key), Depends(bearer_scheme)],
+)
 
 
 @router.get("/databases")

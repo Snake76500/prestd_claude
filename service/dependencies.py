@@ -2,10 +2,16 @@
 from __future__ import annotations
 
 from fastapi import Header, HTTPException, Request, status
+from fastapi.security import HTTPBearer
 
 from prestd_client import PrestdClient
 
 from .config import settings
+
+bearer_scheme = HTTPBearer(
+    auto_error=False,
+    description="Token JWT Keycloak (coller directement le token ou 'Bearer <token>')",
+)
 
 
 def get_client(request: Request) -> PrestdClient:
