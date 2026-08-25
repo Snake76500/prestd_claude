@@ -6,18 +6,28 @@ query builder fluide, opérateurs de filtre, gestion des erreurs HTTP ->
 exceptions dédiées, et authentification JWT.
 """
 
-from .auth import BaseAuth, BasicAuth, CallableAuth, JWTAuth, NoAuth, StaticTokenAuth
+from .auth import (
+    BaseAuth,
+    BasicAuth,
+    CallableAuth,
+    JWTAuth,
+    KeycloakAuth,
+    NoAuth,
+    StaticTokenAuth,
+)
 from .client import PrestdClient
 from .exceptions import (
     PrestdAuthError,
     PrestdConnectionError,
     PrestdError,
     PrestdNotFoundError,
+    PrestdPermissionError,
     PrestdServerError,
     PrestdValidationError,
 )
 from .operators import Agg, Op
 from .query import QueryBuilder
+from .security import UserContext
 from .sync_client import SyncPrestdClient
 
 __all__ = [
@@ -32,9 +42,12 @@ __all__ = [
     "BasicAuth",
     "CallableAuth",
     "JWTAuth",
+    "KeycloakAuth",
+    "UserContext",
     "PrestdError",
     "PrestdConnectionError",
     "PrestdAuthError",
+    "PrestdPermissionError",
     "PrestdNotFoundError",
     "PrestdValidationError",
     "PrestdServerError",

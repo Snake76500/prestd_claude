@@ -27,7 +27,10 @@ import base64
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
+import httpx
+
 from .exceptions import PrestdAuthError
+from .security import UserContext, decode_jwt_payload_unverified
 
 if TYPE_CHECKING:
     from .client import PrestdClient
@@ -163,3 +166,108 @@ class JWTAuth(BaseAuth):
                     "La réponse de prestd /auth ne contient pas de token", payload=payload
                 )
             self._token = token
+
+
+class KeycloakAuth(BaseAuth):
+    """Stratégie d'authentification Keycloak OpenID Connect.
+
+    Permet deux modes de fonctionnement :
+    1. Token statique déjà obtenu :
+       `KeycloakAuth(token="eyJhbGciOi...")`
+    2. Récupération et rafraîchissement automatique auprès de Keycloak (Resource Owner Password Credentials) :
+       `KeycloakAuth(server_url="http://localhost:8080", realm="master", client_id="prestd", username="alice", password="secret")`
+    """
+
+    def __init__(
+        self,
+        token: str | None = None,
+        *,
+        server_url: str | None = None,
+        realm: str = "master",
+        client_id: str | None = None,
+        username: str | None = None,
+        password: str | None = None,
+        client_secret: str | None = None,
+        verify_ssl: bool = True,
+    ) -> None:
+        self._token = token
+        self._server_url = server_url.rstrip("/") if server_url else None
+        self._realm = realm
+        self._client_id = client_id
+        self._username = username
+        self._password = password
+        self._client_secret = client_secret
+        self._verify_ssl = verify_ssl
+        self._client: "PrestdClient | None" = None
+        self._lock: asyncio.Lock | None = None
+
+    def bind(self, client: "PrestdClient") -> None:
+        self._client = client
+
+    @property
+    def token(self) -> str | None:
+        return self._token
+
+    @property
+    def user_context(self) -> UserContext | None:
+        """Retourne le UserContext extrait du token JWT actif (ou None si pas de token)."""
+        if not self._token:
+            return None
+        payload = decode_jwt_payload_unverified(self._token)
+        return UserContext(payload)
+
+    async def get_headers(self) -> dict[str, str]:
+        if self._token is None:
+            await self._login()
+        return {"Authorization": f"Bearer {self._token}"}
+
+    async def on_unauthorized(self) -> bool:
+        """Tentative de ré-authentification auprès de Keycloak sur un 401."""
+        if self._server_url and self._client_id and self._username and self._password:
+            self._token = None
+            await self._login()
+            return True
+        return False
+
+    async def _login(self) -> None:
+        if not (self._server_url and self._client_id and self._username and self._password):
+            raise PrestdAuthError("Aucun token Keycloak fourni et identifiants de connexion incomplets.")
+
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        async with self._lock:
+            if self._token is not None:
+                return
+            token_endpoint = f"{self._server_url}/realms/{self._realm}/protocol/openid-connect/token"
+            payload: dict[str, str] = {
+                "grant_type": "password",
+                "client_id": self._client_id,
+                "username": self._username,
+                "password": self._password,
+            }
+            if self._client_secret:
+                payload["client_secret"] = self._client_secret
+
+            async with httpx.AsyncClient(verify=self._verify_ssl) as http_client:
+                try:
+                    resp = await http_client.post(
+                        token_endpoint,
+                        data=payload,
+                        headers={"Content-Type": "application/x-www-form-urlencoded"},
+                        timeout=10.0,
+                    )
+                except Exception as exc:
+                    raise PrestdAuthError(f"Erreur réseau lors de la connexion à Keycloak: {exc}") from exc
+
+                if resp.status_code != 200:
+                    raise PrestdAuthError(
+                        f"Échec de l'authentification Keycloak (HTTP {resp.status_code}): {resp.text}",
+                        status_code=resp.status_code,
+                        payload=resp.text,
+                    )
+
+                data = resp.json()
+                token = data.get("access_token")
+                if not token:
+                    raise PrestdAuthError("La réponse Keycloak ne contient pas d'access_token", payload=data)
+                self._token = token

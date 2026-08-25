@@ -16,9 +16,20 @@ from typing import Any, Mapping, Sequence
 
 import httpx
 
-from .auth import BaseAuth
-from .exceptions import PrestdAuthError, PrestdConnectionError, raise_for_status
+from .auth import BaseAuth, KeycloakAuth
+from .exceptions import (
+    PrestdAuthError,
+    PrestdConnectionError,
+    PrestdPermissionError,
+    raise_for_status,
+)
 from .query import QueryBuilder
+from .security import (
+    UserContext,
+    check_table_permission,
+    decode_jwt_payload_unverified,
+    resolve_action,
+)
 
 logger = logging.getLogger("prestd_client")
 
@@ -58,12 +69,20 @@ class PrestdClient:
         verify: bool = True,
         transport: httpx.AsyncBaseTransport | None = None,
         auth: BaseAuth | None = None,
+        keycloak_token: str | None = None,
+        verify_permissions: bool = True,
+        admin_roles: Sequence[str] | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.default_database = default_database
         self.default_schema = default_schema
         self._token: str | None = None
+        self._keycloak_token: str | None = keycloak_token
+        self.verify_permissions = verify_permissions
+        self.admin_roles = list(admin_roles) if admin_roles else None
         self._auth = auth
+        if self._keycloak_token and self._auth is None:
+            self._auth = KeycloakAuth(self._keycloak_token)
         if self._auth is not None:
             self._auth.bind(self)
         self._http = httpx.AsyncClient(
@@ -95,6 +114,33 @@ class PrestdClient:
         ```
         """
         self._token = token
+
+    def set_keycloak_token(self, token: str) -> None:
+        """Attache un token JWT Keycloak pour authentifier les requêtes et vérifier les droits."""
+        self._keycloak_token = token
+        self._auth = KeycloakAuth(token)
+        self._auth.bind(self)
+
+    @property
+    def current_user(self) -> UserContext | None:
+        """Retourne le UserContext (identifiant, username, rôles) extrait du token Keycloak actif."""
+        token = self._keycloak_token
+        if not token and isinstance(self._auth, KeycloakAuth):
+            token = self._auth.token
+        if not token and self._token:
+            token = self._token
+        if token:
+            payload = decode_jwt_payload_unverified(token)
+            if payload:
+                return UserContext(payload)
+        return None
+
+    def has_table_permission(self, table: str, action: str) -> bool:
+        """Vérifie si l'utilisateur courant possède le droit (`read`, `write`, `delete`) sur `table`."""
+        user = self.current_user
+        if not user:
+            return False
+        return check_table_permission(user, table, action, admin_roles=self.admin_roles)
 
     # -- authentification --------------------------------------------------
     async def login(self, username: str, password: str) -> str:
@@ -424,9 +470,30 @@ class PrestdClient:
         return db, sch
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
-        """Requête authentifiée : injecte les en-têtes du middleware `auth=...`
-        (ou le token explicite posé via `set_token`/`login`), et retente une
-        fois via `auth.on_unauthorized()` si prestd répond 401."""
+        """Requête authentifiée :
+        1. Vérifie préventivement les permissions Keycloak (si verify_permissions=True).
+        2. Injecte les en-têtes d'authentification.
+        3. Gère le retry automatique sur 401 via `auth.on_unauthorized()`.
+        """
+        # Vérification préventive des permissions Keycloak côté SDK
+        if self.verify_permissions:
+            user = self.current_user
+            if user is not None:
+                table = self._extract_table_from_path(path)
+                if table:
+                    action = resolve_action(method)
+                    if not check_table_permission(user, table, action, admin_roles=self.admin_roles):
+                        raise PrestdPermissionError(
+                            f"Permission denied for action '{action}' on table '{table}'",
+                            status_code=403,
+                            payload={
+                                "error": f"Permission denied for action '{action}' on table '{table}'",
+                                "table": table,
+                                "action": action,
+                                "user": user.username or user.user_id,
+                            },
+                        )
+
         headers = dict(kwargs.pop("headers", {}) or {})
         if self._token:
             headers.setdefault("Authorization", f"Bearer {self._token}")
@@ -445,6 +512,22 @@ class PrestdClient:
             resp = await self._send(method, path, headers=headers, **kwargs)
 
         return self._parse_response(resp)
+
+    def _extract_table_from_path(self, path: str) -> str | None:
+        """Extrait le nom de la table cible depuis le chemin d'URL prestd /{db}/{schema}/{table}."""
+        if path.startswith("/show/") or path in (
+            "/_health",
+            "/_ready",
+            "/databases",
+            "/schemas",
+            "/tables",
+            "/auth",
+        ):
+            return None
+        parts = [p for p in path.strip("/").split("/") if p]
+        if len(parts) >= 3:
+            return parts[2]
+        return None
 
     async def _raw_request(self, method: str, path: str, **kwargs: Any) -> Any:
         """Requête sans injection d'auth ni retry sur 401.

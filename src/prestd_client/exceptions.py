@@ -24,7 +24,11 @@ class PrestdConnectionError(PrestdError):
 
 
 class PrestdAuthError(PrestdError):
-    """Réponse 401/403, ou échec du login JWT (POST /auth)."""
+    """Réponse 401 (non authentifié) ou échec du login JWT (POST /auth)."""
+
+
+class PrestdPermissionError(PrestdAuthError):
+    """Réponse 403 (droits / permissions insuffisants sur la ressource)."""
 
 
 class PrestdNotFoundError(PrestdError):
@@ -43,8 +47,10 @@ def raise_for_status(status_code: int, message: str, payload: Any = None) -> Non
     """Traduit un code HTTP renvoyé par prestd en l'exception adéquate."""
     if status_code < 400:
         return
-    if status_code in (401, 403):
+    if status_code == 401:
         raise PrestdAuthError(message, status_code=status_code, payload=payload)
+    if status_code == 403:
+        raise PrestdPermissionError(message, status_code=status_code, payload=payload)
     if status_code == 404:
         raise PrestdNotFoundError(message, status_code=status_code, payload=payload)
     if status_code == 400:

@@ -58,6 +58,19 @@ class SyncPrestdClient:
         """
         self._async.set_token(token)
 
+    def set_keycloak_token(self, token: str) -> None:
+        """Définit le jeton JWT Keycloak pour authentifier et vérifier les droits."""
+        self._async.set_keycloak_token(token)
+
+    @property
+    def current_user(self) -> Any:
+        """Retourne le UserContext de l'utilisateur Keycloak actif."""
+        return self._async.current_user
+
+    def has_table_permission(self, table: str, action: str) -> bool:
+        """Vérifie si l'utilisateur possède le droit (`read`, `write`, `delete`) sur la table."""
+        return self._async.has_table_permission(table, action)
+
     def health(self) -> Any:
         """GET /_health — Vérifie l'état de santé du serveur prestd.
 
