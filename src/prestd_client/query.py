@@ -1,7 +1,7 @@
 """Query builder fluide pour l'endpoint GET `/{database}/{schema}/{table}` de prestd."""
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING, Any, AsyncIterator, Mapping, Sequence
 
 if TYPE_CHECKING:
     from .client import PrestdClient
@@ -116,9 +116,26 @@ class QueryBuilder:
     # -- exécution -----------------------------------------------------
     def _build_params(self) -> dict[str, str]:
         params = dict(self._params)
-        # prestd exige _page pour activer la pagination quand _page_size est fourni
+
+        # 1. Si aucune pagination n'est explicitement spécifiée et qu'une valeur par défaut existe sur le client
+        if "_page" not in params and "_page_size" not in params and getattr(self._client, "default_page_size", None):
+            params["_page"] = "1"
+            params["_page_size"] = str(self._client.default_page_size)
+
+        # 2. prestd exige _page pour activer la pagination quand _page_size est fourni
         if "_page_size" in params and "_page" not in params:
             params["_page"] = "1"
+
+        # 3. Plafonnement de _page_size selon max_page_size configuré sur le client
+        if "_page_size" in params and getattr(self._client, "max_page_size", None):
+            try:
+                size = int(params["_page_size"])
+                max_size = int(self._client.max_page_size)
+                if max_size > 0 and size > max_size:
+                    params["_page_size"] = str(max_size)
+            except (ValueError, TypeError):
+                pass
+
         if self._or_conditions:
             params["_or"] = "||".join(self._or_conditions)
         return params
@@ -147,6 +164,48 @@ class QueryBuilder:
             except (ValueError, TypeError):
                 pass
         return rows
+
+    async def stream_pages(self, batch_size: int = 100) -> AsyncIterator[list[dict[str, Any]]]:
+        """Générateur asynchrone itérant page par page pour parcourir de grands volumes sans timeout ni surcharge mémoire.
+
+        Exemple :
+        ```python
+        async for page_rows in client.table("logs").stream_pages(batch_size=500):
+            for row in page_rows:
+                process(row)
+        ```
+        """
+        current_page = 1
+        effective_batch_size = batch_size
+        if getattr(self._client, "max_page_size", None):
+            effective_batch_size = min(batch_size, int(self._client.max_page_size))
+
+        while True:
+            qb = QueryBuilder(self._client, self._database, self._schema, self._table)
+            qb._params = dict(self._params)
+            qb._or_conditions = list(self._or_conditions)
+            qb.page(current_page, effective_batch_size)
+
+            rows = await qb.execute()
+            if not rows:
+                break
+            yield rows
+            if len(rows) < effective_batch_size:
+                break
+            current_page += 1
+
+    async def stream(self, batch_size: int = 100) -> AsyncIterator[dict[str, Any]]:
+        """Générateur asynchrone itérant enregistrement par enregistrement à travers toutes les pages.
+
+        Exemple :
+        ```python
+        async for user in client.table("users").stream(batch_size=100):
+            print(user["email"])
+        ```
+        """
+        async for page_rows in self.stream_pages(batch_size=batch_size):
+            for row in page_rows:
+                yield row
 
     async def first(self) -> dict[str, Any] | None:
         """Exécute la requête avec LIMIT 1 (page 1, taille 1) et renvoie le premier élément ou None.

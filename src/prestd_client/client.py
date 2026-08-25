@@ -72,10 +72,14 @@ class PrestdClient:
         keycloak_token: str | None = None,
         verify_permissions: bool = True,
         admin_roles: Sequence[str] | None = None,
+        default_page_size: int | None = None,
+        max_page_size: int | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.default_database = default_database
         self.default_schema = default_schema
+        self.default_page_size = default_page_size
+        self.max_page_size = max_page_size
         self._token: str | None = None
         self._keycloak_token: str | None = keycloak_token
         self.verify_permissions = verify_permissions

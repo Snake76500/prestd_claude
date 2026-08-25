@@ -110,3 +110,66 @@ async def test_query_builder_pagination_slicing():
         assert [u["id"] for u in page1] == [1, 2, 3]
 
     await c.close()
+
+
+@pytest.mark.asyncio
+async def test_query_builder_default_and_max_page_size():
+    import respx
+    import httpx
+    from prestd_client import PrestdClient
+
+    # Client avec page par défaut = 50 et max = 200
+    c = PrestdClient(
+        "http://testserver",
+        default_database="mydb",
+        default_schema="public",
+        default_page_size=50,
+        max_page_size=200,
+    )
+
+    with respx.mock(base_url="http://testserver") as mock:
+        # 1. Sans .page() -> injecte _page=1 et _page_size=50
+        route1 = mock.get("/mydb/public/users", params={"_page": "1", "_page_size": "50"}).mock(
+            return_value=httpx.Response(200, json=[{"id": 1}])
+        )
+        res = await c.table("users").execute()
+        assert res == [{"id": 1}]
+        assert route1.called
+
+        # 2. Avec .page(1, page_size=5000) -> plafonné à 200
+        route2 = mock.get("/mydb/public/users", params={"_page": "1", "_page_size": "200"}).mock(
+            return_value=httpx.Response(200, json=[{"id": 2}])
+        )
+        res2 = await c.table("users").page(1, 5000).execute()
+        assert res2 == [{"id": 2}]
+        assert route2.called
+
+    await c.close()
+
+
+@pytest.mark.asyncio
+async def test_query_builder_streaming():
+    import respx
+    import httpx
+    from prestd_client import PrestdClient
+
+    c = PrestdClient("http://testserver", default_database="mydb", default_schema="public")
+
+    with respx.mock(base_url="http://testserver") as mock:
+        # Page 1: 3 éléments
+        mock.get("/mydb/public/users", params={"_page": "1", "_page_size": "3"}).mock(
+            return_value=httpx.Response(200, json=[{"id": 1}, {"id": 2}, {"id": 3}])
+        )
+        # Page 2: 2 éléments (< batch_size 3 -> fin de l'itération)
+        mock.get("/mydb/public/users", params={"_page": "2", "_page_size": "3"}).mock(
+            return_value=httpx.Response(200, json=[{"id": 4}, {"id": 5}])
+        )
+
+        # Test stream() un par un
+        collected_ids = []
+        async for row in c.table("users").stream(batch_size=3):
+            collected_ids.append(row["id"])
+
+        assert collected_ids == [1, 2, 3, 4, 5]
+
+    await c.close()

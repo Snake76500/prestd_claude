@@ -25,6 +25,13 @@ from .exceptions import (
     PrestdServerError,
     PrestdValidationError,
 )
+from .connector import (
+    PaginatedResponse,
+    PrestdServiceConnector,
+    ServiceTableConnector,
+    SyncPrestdServiceConnector,
+    get_service_connector,
+)
 from .operators import Agg, Op
 from .query import QueryBuilder
 from .security import UserContext
@@ -33,6 +40,11 @@ from .sync_client import SyncPrestdClient
 __all__ = [
     "PrestdClient",
     "SyncPrestdClient",
+    "PrestdServiceConnector",
+    "SyncPrestdServiceConnector",
+    "ServiceTableConnector",
+    "PaginatedResponse",
+    "get_service_connector",
     "QueryBuilder",
     "Op",
     "Agg",
